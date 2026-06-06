@@ -1,112 +1,136 @@
-# opencode-harness-extract
+# @opencode-harness/llm
 
-## Problem Scope
+A standalone LLM client extracted from opencode's `packages/llm` infrastructure.
 
-### The Challenge
+## Overview
 
-Opencode has a sophisticated LLM client infrastructure in `packages/llm` that provides:
-- Multiple LLM provider integrations (OpenAI, Anthropic, Google, etc.)
-- Protocol implementations for different LLM APIs
-- Request/response framing and encoding
-- Caching policies
-- Tool execution runtime
-- Error handling and retry logic
-- Streaming support
-- Rich type safety with Effect
+This package provides:
 
-However, this codebase is tightly integrated with opencode's monorepo structure:
-- Uses `catalog:` protocol for dependencies (pnpm workspace catalog)
-- Has `workspace:*` references to internal packages like `@opencode-ai/http-recorder`
-- Uses Effect v4.0.0-beta.66 with unstable APIs
-- Has complex Layer-based architecture that's hard to extract
+- **LLMClient**: Effect-based client for LLM API calls with type-safe error handling
+- **Layer architecture**: Clean service composition using Effect's Layer pattern
+- **Provider support**: OpenAI-compatible APIs (OpenAI, Anthropic, Google, local LLMs)
+- **Protocol implementations**: OpenAI Chat, Anthropic Messages, and more
+- **Tool execution**: Run tools with proper error handling and result parsing
 
-### Why Extract?
+## Why This Exists
 
-The LLM client infrastructure is **incredibly valuable** and could be:
-1. A standalone package for the community
-2. A reusable harness for building LLM-powered tools
-3. A reference implementation for Effect + LLM integration
+Opencode's `packages/llm` is incredibly powerful but tightly coupled to the opencode monorepo:
 
-## Goals
+- Uses `catalog:` protocol for dependencies (pnpm workspace only)
+- Has `workspace:*` references to internal packages
+- Complex Layer-based architecture
 
-1. **Create a standalone package** that extracts opencode/llm's core functionality
-2. **Make it work outside the monorepo** by:
-   - Resolving `catalog:` dependencies to actual npm packages
-   - Replacing `workspace:*` references with published packages or local copies
-   - Fixing any breaking API changes between Effect versions
-3. **Document the extraction process** so others can understand:
-   - How opencode/llm works
-   - How to use Effect v4 with LLMs
-   - How to structure LLM client code
-4. **Create a test harness** to verify the extracted code works with real LLMs
+This extract makes opencode's LLM infrastructure available as a standalone package for:
+- Building LLM-powered tools outside the opencode monorepo
+- Learning Effect v4 patterns for LLM integration
+- Reusable LLM client infrastructure
 
-## Approach
-
-### Step 1: Understand the Dependencies
+## Installation
 
 ```bash
-# Check what opencode/llm actually needs
-cd /Users/av4nda/Code/opencode/packages/llm
-cat package.json
-
-# Check the catalog
-cd /Users/av4nda/Code/opencode
-cat package.json | grep -A 50 '"catalog"'
+pnpm add @opencode-harness/llm effect
 ```
 
-### Step 2: Create the Extracted Package
+## Quick Start
 
+```typescript
+import { LLMClient, LLMClientLayer } from "@opencode-harness/llm";
+import * as Effect from "effect/Effect";
+
+const config = {
+  baseUrl: "http://localhost:8080/v1",
+  model: "gpt-oss",
+  apiKey: process.env.LLM_API_KEY,
+  maxTokens: 1000,
+  temperature: 0.1,
+};
+
+const program = Effect.gen(function* () {
+  const client = yield* Effect.provide(LLMClientLayer)(LLMClient);
+
+  // Generate text
+  const result = yield* client.generate(config, [
+    { role: "system", content: "You are a helpful assistant." },
+    { role: "user", content: "Hello!" },
+  ]);
+  console.log(result);
+
+  // Generate JSON object
+  const obj = yield* client.generateObject(
+    config,
+    [{ role: "user", content: 'Return { "name": "Alice", "age": 30 }' }],
+    { type: "object" }
+  );
+  console.log(obj);
+});
+
+Effect.runPromise(program);
 ```
-opencode-harness-extract/
-├── package.json
-├── tsconfig.json
-├── src/
-│   ├── index.ts          # Main exports
-│   ├── client.ts         # LLMClient wrapper
-│   ├── providers/        # Provider implementations
-│   │   ├── openai-compatible.ts
-│   │   └── ...
-│   ├── protocols/        # Protocol implementations
-│   │   ├── openai-chat.ts
-│   │   └── ...
-│   ├── schema.ts         # Type definitions
-│   └── utils.ts          # Helper functions
-└── README.md
+
+## Architecture
+
+### Service Pattern
+
+```typescript
+// Define a service
+export class LLMClient extends Context.Service<LLMClient, LLMClientShape>()("LLMClient") {}
+
+// Service interface
+export interface LLMClientShape {
+  readonly generate: (
+    config: LLMConfig,
+    messages: Array<{ role: string; content: string }>,
+  ) => Effect.Effect<string, Error>;
+
+  readonly generateObject: <T>(
+    config: LLMConfig,
+    messages: Array<{ role: string; content: string }>,
+    schema: unknown,
+  ) => Effect.Effect<T, Error>;
+}
 ```
 
-### Step 3: Resolve Dependencies
+### Layer Pattern
 
-| Dependency | Source | Version |
-|------------|--------|---------|
-| effect | effect-smol | 4.0.0-beta.70 |
-| @smithy/eventstream-codec | npm | 4.2.14 |
-| @smithy/util-utf8 | npm | 4.2.2 |
-| aws4fetch | npm | 1.0.20 |
+```typescript
+// Create a layer that provides the service
+export const LLMClientLayer = Layer.succeed(
+  LLMClient,
+  {
+    generate: (config, messages) => Effect.gen(function* () { /* ... */ }),
+    generateObject: (config, messages, schema) => Effect.gen(function* () { /* ... */ }),
+  }
+);
 
-### Step 4: Fix Breaking Changes
+// Use with Effect.provide
+const result = yield* Effect.provide(LLMClientLayer)(LLMClient);
+```
 
-Effect v4 has breaking changes from v3:
-- `Context.Tag()` → `Context.Service()`
-- Layer construction changed
-- Effect.provide signature changed
+## Projects Using This
 
-### Step 5: Test with Real LLMs
+- [anonize-ts](https://github.com/belarusian/anonize-ts) - PII anonymization tool
 
-Use the UnSloth endpoint to verify:
-- JSON mode works
-- Free text mode works
-- Error handling works
-- Auth works
+## Differences from opencode/llm
 
-## Success Criteria
+| Feature | opencode/llm | @opencode-harness/llm |
+|---------|--------------|----------------------|
+| Dependencies | catalog: protocol | Standard npm packages |
+| Monorepo deps | workspace:* | None |
+| Effect version | v4 beta | v4 beta |
+| Tool execution | Full runtime | Basic utilities |
+| Streaming | SSE/WebSocket | Not yet |
+| Caching | Built-in | Not yet |
 
-- [ ] Package builds without errors
-- [ ] Tests pass with real LLM calls
-- [ ] Documentation explains how to use it
-- [ ] No references to opencode monorepo internals
+## Status
 
-## Notes
+⚠️ **Pre-release**: This is an extraction in progress. The core LLM client works, but some features from opencode/llm are still missing:
 
-- This is about **learning** and **documentation**, not production use
-- We want to understand opencode's patterns to apply them elsewhere
-- The extracted code should be simpler than the full opencode/llm
+- [ ] Tool execution runtime
+- [ ] Streaming support
+- [ ] Caching
+- [ ] Request/response logging
+- [ ] Full provider implementations
+
+## License
+
+MIT
