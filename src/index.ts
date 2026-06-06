@@ -5,26 +5,14 @@
  * 
  * This package provides:
  * - LLMClient: Effect-based client for LLM API calls
- * - Providers: OpenAI, Anthropic, Google, and compatible providers
- * - Protocols: OpenAI Chat, Anthropic Messages, Bedrock Converse, Gemini
  * - Tool execution: Run tools with proper error handling
- * - Streaming: Support for SSE and WebSocket streaming
+ * - Streaming: Support for SSE streaming responses
+ * - Caching: Request/response caching for efficiency
  */
 
 export { LLMClient, LLMClientLayer } from "./client.js";
-export type { ProviderDefinition, ProviderModelFactory } from "./provider.js";
-export * as providers from "./providers/index.js";
-export * as protocols from "./protocols/index.js";
-export * as schema from "./schema.js";
+export { Cache, CacheLayer, makeCache } from "./cache.js";
 export type { Tool, ToolFailure } from "./tool.js";
-export { toDefinitions, tool } from "./tool.js";
-export type {
-  AnyTool,
-  ExecutableTool,
-  ExecutableTools,
-  Tool as ToolShape,
-  ToolExecute,
-  ToolExecuteContext,
-  Tools,
-  ToolSchema,
-} from "./tool.js";
+export { ToolExecutor, ToolExecutorLayer, ToolLayer, makeToolExecutor, tool } from "./tool.js";
+export { generateStream } from "./streaming.js";
+export type { ToolSchema } from "./tool.js";

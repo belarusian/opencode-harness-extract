@@ -3,6 +3,8 @@
  */
 
 import * as Effect from "effect/Effect";
+import * as Context from "effect/Context";
+import * as Layer from "effect/Layer";
 
 export interface ToolSchema<T> {
   readonly name: string;
@@ -18,10 +20,6 @@ export interface ToolFailure {
   readonly error: Error;
 }
 
-export function toDefinitions<T>(_tools: Tool<T>[]): unknown {
-  return [];
-}
-
 export function tool<T>(
   name: string,
   description: string,
@@ -32,26 +30,83 @@ export function tool<T>(
   };
 }
 
-export interface Tools {
-  [key: string]: Tool<unknown>;
+/**
+ * Tool execution service - executes tools with proper error handling
+ */
+export class ToolExecutor extends Context.Service<ToolExecutor, ToolExecutorShape>()("opencode-harness/ToolExecutor") {}
+
+export interface ToolExecutorShape {
+  readonly execute: <T>(
+    tool: Tool<T>,
+    input: T,
+  ) => Effect.Effect<unknown, Error>;
 }
 
-export interface AnyTool {
-  schema: ToolSchema<unknown>;
+/**
+ * Tool executor implementation
+ */
+export const makeToolExecutor = Layer.succeed(
+  ToolExecutor,
+  {
+    execute: <T>(tool: Tool<T>, input: T) =>
+      Effect.gen(function* () {
+        yield* Effect.logInfo(`[ToolExecutor] Executing tool: ${tool.schema.name}`);
+        
+        const result = yield* Effect.tapError(
+          tool.schema.execute(input),
+          (error) => Effect.logError(`[ToolExecutor] Tool ${tool.schema.name} failed: ${error.message}`)
+        );
+        
+        yield* Effect.logInfo(`[ToolExecutor] Tool ${tool.schema.name} completed`);
+        return result;
+      })
+  }
+);
+
+/**
+ * Layer for ToolExecutor
+ */
+export const ToolExecutorLayer = makeToolExecutor;
+
+/**
+ * Tool cache for caching tool execution results
+ */
+export class ToolCache extends Context.Service<ToolCache, ToolCacheShape>()("opencode-harness/ToolCache") {}
+
+export interface ToolCacheShape {
+  readonly get: <T>(key: string) => Effect.Effect<T | undefined, Error>;
+  readonly set: <T>(key: string, value: T) => Effect.Effect<void, Error>;
+  readonly clear: () => Effect.Effect<void, Error>;
 }
 
-export interface ExecutableTool {
-  _tag: "ExecutableTool";
-}
+/**
+ * In-memory tool cache implementation
+ */
+export const makeToolCache = Layer.succeed(
+  ToolCache,
+  {
+    get: <T>(key: string) => Effect.sync(() => {
+      const cached = cache.get(key);
+      return cached as T | undefined;
+    }),
+    set: <T>(key: string, value: T) => Effect.sync(() => {
+      cache.set(key, value);
+    }),
+    clear: () => Effect.sync(() => {
+      cache.clear();
+    })
+  }
+);
 
-export interface ExecutableTools {
-  [key: string]: ExecutableTool;
-}
+// In-memory cache storage
+const cache: Map<string, unknown> = new Map();
 
-export interface ToolExecute {
-  (tool: AnyTool, input: unknown): Effect.Effect<unknown, Error>;
-}
+/**
+ * Layer for ToolCache
+ */
+export const ToolCacheLayer = makeToolCache;
 
-export interface ToolExecuteContext {
-  // Context for tool execution
-}
+/**
+ * Combined layer for tool execution with caching
+ */
+export const ToolLayer = Layer.provide(ToolCacheLayer)(ToolExecutorLayer);

@@ -8,6 +8,7 @@ import * as Effect from "effect/Effect";
 import * as Context from "effect/Context";
 import * as Layer from "effect/Layer";
 import type { LLMConfig as Config } from "./config.js";
+import { Tool } from "./tool.js";
 /**
  * Configuration for the LLM client.
  */
@@ -36,6 +37,11 @@ export interface LLMClientShape {
         role: string;
         content: string;
     }>, schema: unknown) => Effect.Effect<T, Error>;
+    readonly generateStream: (config: Config, messages: Array<{
+        role: string;
+        content: string;
+    }>) => Effect.Effect<void, Error>;
+    readonly executeTool: <T>(tool: Tool<T>, input: T) => Effect.Effect<unknown, Error>;
 }
 /**
  * Create the LLM client implementation.
@@ -43,7 +49,7 @@ export interface LLMClientShape {
  */
 export declare const makeLLMClient: Layer.Layer<LLMClient, never, never>;
 /**
- * Layer for LLMClient.
+ * Layer for LLMClient with ToolExecutor
  */
 export declare const LLMClientLayer: Layer.Layer<LLMClient, never, never>;
 export {};

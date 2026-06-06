@@ -2,6 +2,8 @@
  * Tool execution utilities
  */
 import * as Effect from "effect/Effect";
+import * as Context from "effect/Context";
+import * as Layer from "effect/Layer";
 export interface ToolSchema<T> {
     readonly name: string;
     readonly description: string;
@@ -13,23 +15,46 @@ export interface Tool<T> {
 export interface ToolFailure {
     readonly error: Error;
 }
-export declare function toDefinitions<T>(_tools: Tool<T>[]): unknown;
 export declare function tool<T>(name: string, description: string, execute: (input: T) => Effect.Effect<unknown, Error>): Tool<T>;
-export interface Tools {
-    [key: string]: Tool<unknown>;
+declare const ToolExecutor_base: Context.ServiceClass<ToolExecutor, "opencode-harness/ToolExecutor", ToolExecutorShape>;
+/**
+ * Tool execution service - executes tools with proper error handling
+ */
+export declare class ToolExecutor extends ToolExecutor_base {
 }
-export interface AnyTool {
-    schema: ToolSchema<unknown>;
+export interface ToolExecutorShape {
+    readonly execute: <T>(tool: Tool<T>, input: T) => Effect.Effect<unknown, Error>;
 }
-export interface ExecutableTool {
-    _tag: "ExecutableTool";
+/**
+ * Tool executor implementation
+ */
+export declare const makeToolExecutor: Layer.Layer<ToolExecutor, never, never>;
+/**
+ * Layer for ToolExecutor
+ */
+export declare const ToolExecutorLayer: Layer.Layer<ToolExecutor, never, never>;
+declare const ToolCache_base: Context.ServiceClass<ToolCache, "opencode-harness/ToolCache", ToolCacheShape>;
+/**
+ * Tool cache for caching tool execution results
+ */
+export declare class ToolCache extends ToolCache_base {
 }
-export interface ExecutableTools {
-    [key: string]: ExecutableTool;
+export interface ToolCacheShape {
+    readonly get: <T>(key: string) => Effect.Effect<T | undefined, Error>;
+    readonly set: <T>(key: string, value: T) => Effect.Effect<void, Error>;
+    readonly clear: () => Effect.Effect<void, Error>;
 }
-export interface ToolExecute {
-    (tool: AnyTool, input: unknown): Effect.Effect<unknown, Error>;
-}
-export interface ToolExecuteContext {
-}
+/**
+ * In-memory tool cache implementation
+ */
+export declare const makeToolCache: Layer.Layer<ToolCache, never, never>;
+/**
+ * Layer for ToolCache
+ */
+export declare const ToolCacheLayer: Layer.Layer<ToolCache, never, never>;
+/**
+ * Combined layer for tool execution with caching
+ */
+export declare const ToolLayer: Layer.Layer<ToolExecutor, never, never>;
+export {};
 //# sourceMappingURL=tool.d.ts.map

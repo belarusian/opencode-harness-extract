@@ -9,6 +9,7 @@ import * as Effect from "effect/Effect";
 import * as Context from "effect/Context";
 import * as Layer from "effect/Layer";
 import type { LLMConfig as Config } from "./config.js";
+import { Tool, ToolExecutor, ToolExecutorLayer } from "./tool.js";
 
 /**
  * Configuration for the LLM client.
@@ -40,6 +41,16 @@ export interface LLMClientShape {
     messages: Array<{ role: string; content: string }>,
     schema: unknown,
   ) => Effect.Effect<T, Error>;
+
+  readonly generateStream: (
+    config: Config,
+    messages: Array<{ role: string; content: string }>,
+  ) => Effect.Effect<void, Error>;
+
+  readonly executeTool: <T>(
+    tool: Tool<T>,
+    input: T,
+  ) => Effect.Effect<unknown, Error>;
 }
 
 /**
@@ -163,10 +174,19 @@ export const makeLLMClient = Layer.succeed(
           return yield* Effect.fail(new Error(`Failed to parse JSON: ${error}`));
         }
       }),
+
+    generateStream: (_config: Config, _messages: Array<{ role: string; content: string }>) =>
+      Effect.void,
+
+    executeTool: <T>(tool: Tool<T>, input: T) =>
+      Effect.gen(function* () {
+        const toolExecutor = yield* ToolExecutor;
+        return yield* toolExecutor.execute(tool, input);
+      }).pipe(Effect.provide(ToolExecutorLayer)),
   }
 );
 
 /**
- * Layer for LLMClient.
+ * Layer for LLMClient with ToolExecutor
  */
-export const LLMClientLayer = makeLLMClient;
+export const LLMClientLayer = Layer.provide(ToolExecutorLayer)(makeLLMClient);

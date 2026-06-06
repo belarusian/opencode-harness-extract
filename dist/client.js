@@ -7,6 +7,7 @@
 import * as Effect from "effect/Effect";
 import * as Context from "effect/Context";
 import * as Layer from "effect/Layer";
+import { ToolExecutor, ToolExecutorLayer } from "./tool.js";
 /**
  * Service for the LLM client.
  */
@@ -115,9 +116,14 @@ export const makeLLMClient = Layer.succeed(LLMClient, {
             return yield* Effect.fail(new Error(`Failed to parse JSON: ${error}`));
         }
     }),
+    generateStream: (_config, _messages) => Effect.void,
+    executeTool: (tool, input) => Effect.gen(function* () {
+        const toolExecutor = yield* ToolExecutor;
+        return yield* toolExecutor.execute(tool, input);
+    }).pipe(Effect.provide(ToolExecutorLayer)),
 });
 /**
- * Layer for LLMClient.
+ * Layer for LLMClient with ToolExecutor
  */
-export const LLMClientLayer = makeLLMClient;
+export const LLMClientLayer = Layer.provide(ToolExecutorLayer)(makeLLMClient);
 //# sourceMappingURL=client.js.map
