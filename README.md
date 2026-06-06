@@ -1,29 +1,24 @@
-# @opencode-harness/llm
+# opencode-harness-extract
 
-A standalone LLM client extracted from opencode's `packages/llm` infrastructure.
+> A minimal, local-first LLM harness extracted from opencode's infrastructure
 
 ## Overview
 
-This package provides:
+This package provides a streamlined LLM client for building local inference applications:
 
-- **LLMClient**: Effect-based client for LLM API calls with type-safe error handling
-- **Layer architecture**: Clean service composition using Effect's Layer pattern
-- **Provider support**: OpenAI-compatible APIs (OpenAI, Anthropic, Google, local LLMs)
-- **Protocol implementations**: OpenAI Chat, Anthropic Messages, and more
+- **LLMClient**: Effect-based client for OpenAI-compatible APIs
+- **Local-first**: Works with llama.cpp, ollama, vllm, or any OpenAI-compatible endpoint
 - **Tool execution**: Run tools with proper error handling and result parsing
+- **Streaming**: Support for SSE streaming responses
+- **Caching**: Request/response caching for efficiency
 
 ## Why This Exists
 
-Opencode's `packages/llm` is incredibly powerful but tightly coupled to the opencode monorepo:
+Opencode's `packages/llm` is powerful but tightly coupled to the monorepo. This extract makes it usable as a standalone package while staying focused on:
 
-- Uses `catalog:` protocol for dependencies (pnpm workspace only)
-- Has `workspace:*` references to internal packages
-- Complex Layer-based architecture
-
-This extract makes opencode's LLM infrastructure available as a standalone package for:
-- Building LLM-powered tools outside the opencode monorepo
-- Learning Effect v4 patterns for LLM integration
-- Reusable LLM client infrastructure
+1. **Local inference** - llama.cpp, ollama, vllm, etc.
+2. **OpenAI-compatible API** - No need for provider-specific clients
+3. **Real features** - Tool execution, streaming, caching
 
 ## Installation
 
@@ -39,8 +34,7 @@ import * as Effect from "effect/Effect";
 
 const config = {
   baseUrl: "http://localhost:8080/v1",
-  model: "gpt-oss",
-  apiKey: process.env.LLM_API_KEY,
+  model: "llama-cpp/qwen3-coder-next-q8",
   maxTokens: 1000,
   temperature: 0.1,
 };
@@ -67,16 +61,16 @@ const program = Effect.gen(function* () {
 Effect.runPromise(program);
 ```
 
-## Architecture
+## API
 
-### Service Pattern
+### LLMClient
+
+The core service for LLM interactions.
 
 ```typescript
-// Define a service
-export class LLMClient extends Context.Service<LLMClient, LLMClientShape>()("LLMClient") {}
+class LLMClient extends Context.Service<LLMClient, LLMClientShape>()("opencode-harness/LLMClient") {}
 
-// Service interface
-export interface LLMClientShape {
+interface LLMClientShape {
   readonly generate: (
     config: LLMConfig,
     messages: Array<{ role: string; content: string }>,
@@ -87,49 +81,126 @@ export interface LLMClientShape {
     messages: Array<{ role: string; content: string }>,
     schema: unknown,
   ) => Effect.Effect<T, Error>;
+
+  readonly generateStream: (
+    config: LLMConfig,
+    messages: Array<{ role: string; content: string }>,
+  ) => AsyncGenerator<string, void, unknown>;
+
+  readonly executeTool: <T>(
+    tool: Tool<T>,
+    input: T,
+  ) => Effect.Effect<unknown, Error>;
 }
+```
+
+### Tool Execution
+
+Define and execute tools:
+
+```typescript
+import { tool, Tool } from "@opencode-harness/llm";
+import * as Effect from "effect/Effect";
+
+// Define a tool
+const getCurrentWeather = tool<{
+  location: string;
+  unit: "celsius" | "fahrenheit";
+}>(
+  "get_current_weather",
+  "Get the current weather for a location",
+  ({ location, unit }) => {
+    // Tool execution logic
+    return Effect.succeed({ temperature: 22, unit });
+  }
+);
+
+// Execute with client
+const program = Effect.gen(function* () {
+  const client = yield* Effect.provide(LLMClientLayer)(LLMClient);
+  const result = yield* client.executeTool(getCurrentWeather, {
+    location: "San Francisco",
+    unit: "celsius",
+  });
+  console.log(result); // { temperature: 22, unit: "celsius" }
+});
+```
+
+### Streaming
+
+Stream responses as they arrive:
+
+```typescript
+const program = Effect.gen(function* () {
+  const client = yield* Effect.provide(LLMClientLayer)(LLMClient);
+  
+  for await (const chunk of client.generateStream(config, [
+    { role: "user", content: "Write a haiku about coding" },
+  ])) {
+    process.stdout.write(chunk);
+  }
+});
+```
+
+### Caching
+
+Cache responses to avoid repeated API calls:
+
+```typescript
+import { Cache, CacheLayer } from "@opencode-harness/llm";
+
+const program = Effect.gen(function* () {
+  // Provide both cache and LLM client
+  const client = yield* Effect.provide(CacheLayer)(LLMClient);
+  
+  // First call - cache miss, calls LLM
+  const result1 = yield* client.generate(config, [{ role: "user", content: "Hello" }]);
+  
+  // Second call - cache hit, returns cached response
+  const result2 = yield* client.generate(config, [{ role: "user", content: "Hello" }]);
+});
+```
+
+## Architecture
+
+### Service Pattern
+
+```typescript
+export class LLMClient extends Context.Service<LLMClient, LLMClientShape>()("opencode-harness/LLMClient") {}
 ```
 
 ### Layer Pattern
 
 ```typescript
-// Create a layer that provides the service
-export const LLMClientLayer = Layer.succeed(
-  LLMClient,
-  {
-    generate: (config, messages) => Effect.gen(function* () { /* ... */ }),
-    generateObject: (config, messages, schema) => Effect.gen(function* () { /* ... */ }),
-  }
-);
+// Provide the LLM client
+export const LLMClientLayer = Layer.succeed(LLMClient, {
+  generate: (config, messages) => Effect.gen(function* () { /* ... */ }),
+  generateObject: (config, messages, schema) => Effect.gen(function* () { /* ... */ }),
+  generateStream: (config, messages) => { /* ... */ },
+  executeTool: (tool, input) => { /* ... */ },
+});
 
-// Use with Effect.provide
-const result = yield* Effect.provide(LLMClientLayer)(LLMClient);
+// Provide caching
+export const CacheLayer = Layer.succeed(Cache, {
+  get: (key) => Effect.succeed(cachedData),
+  set: (key, value) => Effect.void,
+});
 ```
 
 ## Projects Using This
 
 - [anonize-ts](https://github.com/belarusian/anonize-ts) - PII anonymization tool
 
-## Differences from opencode/llm
-
-| Feature | opencode/llm | @opencode-harness/llm |
-|---------|--------------|----------------------|
-| Dependencies | catalog: protocol | Standard npm packages |
-| Monorepo deps | workspace:* | None |
-| Effect version | v4 beta | v4 beta |
-| Tool execution | Full runtime | Basic utilities |
-| Streaming | SSE/WebSocket | Not yet |
-| Caching | Built-in | Not yet |
-
 ## Status
 
-⚠️ **Pre-release**: This is an extraction in progress. The core LLM client works, but some features from opencode/llm are still missing:
-
-- [ ] Tool execution runtime
-- [ ] Streaming support
-- [ ] Caching
-- [ ] Request/response logging
-- [ ] Full provider implementations
+| Feature | Status |
+|---------|--------|
+| LLMClient (generate/generateObject) | ✅ Done |
+| Tool execution | ✅ In progress |
+| Streaming | ✅ In progress |
+| Caching | ✅ In progress |
+| OpenAI-compatible provider | ✅ Done |
+| Provider abstraction | ⏭️ Not needed |
 
 ## License
 
