@@ -12,7 +12,6 @@
 
 export { LLMClient, LLMClientLayer } from "./client.js";
 export { Cache, CacheLayer, makeCache } from "./cache.js";
-export type { Tool, ToolFailure } from "./tool.js";
 export { ToolExecutor, ToolExecutorLayer, ToolLayer, makeToolExecutor, tool } from "./tool.js";
+export type { Tool, ToolFailure, ToolSchema } from "./tool.js";
 export { generateStream } from "./streaming.js";
-export type { ToolSchema } from "./tool.js";
