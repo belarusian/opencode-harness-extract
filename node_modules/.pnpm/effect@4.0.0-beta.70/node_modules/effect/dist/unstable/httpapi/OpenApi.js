@@ -1,0 +1,601 @@
+/**
+ * The `OpenApi` module converts declarative `HttpApi` definitions into
+ * OpenAPI 3.1 specifications and provides annotations for shaping the
+ * generated document.
+ *
+ * Use this module when you need to publish an `HttpApi` contract to tooling
+ * such as Swagger UI, Scalar, client generators, API gateways, or documentation
+ * pipelines. `fromApi` reflects the API's groups and endpoints into tags,
+ * paths, operations, parameters, request bodies, responses, security schemes,
+ * and component schemas while preserving Effect Schema metadata where OpenAPI
+ * can represent it.
+ *
+ * The generated specification is driven by annotations on APIs, groups,
+ * endpoints, security definitions, and schemas. `Title`, `Description`,
+ * `Summary`, `Version`, `Servers`, `License`, `ExternalDocs`, `Identifier`,
+ * `Deprecated`, and `Format` feed the corresponding OpenAPI fields; `Exclude`
+ * omits a group or endpoint; `Override` shallowly merges custom fields; and
+ * `Transform` can rewrite the generated API, tag, or operation object. Schema
+ * identifiers are important for stable component names, additional schemas must
+ * have identifiers, and invalid OpenAPI component keys are rejected during
+ * generation.
+ *
+ * A few generation details are worth keeping in mind: `HttpApiSchema`
+ * encodings choose media types and special representations for JSON,
+ * form-url-encoded, text, binary, and multipart payloads; no-content schemas
+ * emit responses without bodies; request and response unions are grouped by
+ * status code and content type; path parameters are rendered from `:id` route
+ * segments as `{id}`; and schemas are converted through the OpenAPI 3.1 JSON
+ * Schema representation before being patched into the final document.
+ *
+ * @since 4.0.0
+ */
+import * as Arr from "../../Array.js";
+import * as Context from "../../Context.js";
+import { constFalse } from "../../Function.js";
+import * as JsonPatch from "../../JsonPatch.js";
+import { escapeToken } from "../../JsonPointer.js";
+import * as JsonSchema from "../../JsonSchema.js";
+import * as Option from "../../Option.js";
+import * as Schema from "../../Schema.js";
+import * as AST from "../../SchemaAST.js";
+import * as SchemaRepresentation from "../../SchemaRepresentation.js";
+import * as HttpMethod from "../http/HttpMethod.js";
+import * as HttpApi from "./HttpApi.js";
+import * as HttpApiEndpoint from "./HttpApiEndpoint.js";
+import * as HttpApiMiddleware from "./HttpApiMiddleware.js";
+import * as HttpApiSchema from "./HttpApiSchema.js";
+/**
+ * OpenAPI annotation for overriding generated identifiers, including operation ids.
+ *
+ * @category annotations
+ * @since 4.0.0
+ */
+export class Identifier extends /*#__PURE__*/Context.Service()("effect/httpapi/OpenApi/Identifier") {}
+/**
+ * OpenAPI annotation for setting the API title or group tag name.
+ *
+ * @category annotations
+ * @since 4.0.0
+ */
+export class Title extends /*#__PURE__*/Context.Service()("effect/httpapi/OpenApi/Title") {}
+/**
+ * OpenAPI annotation for setting the generated API version.
+ *
+ * @category annotations
+ * @since 4.0.0
+ */
+export class Version extends /*#__PURE__*/Context.Service()("effect/httpapi/OpenApi/Version") {}
+/**
+ * OpenAPI annotation for setting generated descriptions on APIs, groups, endpoints, or security schemes.
+ *
+ * @category annotations
+ * @since 4.0.0
+ */
+export class Description extends /*#__PURE__*/Context.Service()("effect/httpapi/OpenApi/Description") {}
+/**
+ * OpenAPI annotation for setting the generated API license metadata.
+ *
+ * @category annotations
+ * @since 4.0.0
+ */
+export class License extends /*#__PURE__*/Context.Service()("effect/httpapi/OpenApi/License") {}
+/**
+ * OpenAPI annotation for adding external documentation metadata to groups or endpoints.
+ *
+ * @category annotations
+ * @since 4.0.0
+ */
+export class ExternalDocs extends /*#__PURE__*/Context.Service()("effect/httpapi/OpenApi/ExternalDocs") {}
+/**
+ * OpenAPI annotation for setting the generated API server list.
+ *
+ * @category annotations
+ * @since 4.0.0
+ */
+export class Servers extends /*#__PURE__*/Context.Service()("effect/httpapi/OpenApi/Servers") {}
+/**
+ * OpenAPI annotation for setting the format metadata, such as a bearer token format on security schemes.
+ *
+ * @category annotations
+ * @since 4.0.0
+ */
+export class Format extends /*#__PURE__*/Context.Service()("effect/httpapi/OpenApi/Format") {}
+/**
+ * OpenAPI annotation for setting generated summary text.
+ *
+ * @category annotations
+ * @since 4.0.0
+ */
+export class Summary extends /*#__PURE__*/Context.Service()("effect/httpapi/OpenApi/Summary") {}
+/**
+ * OpenAPI annotation for marking a generated endpoint operation as deprecated.
+ *
+ * @category annotations
+ * @since 4.0.0
+ */
+export class Deprecated extends /*#__PURE__*/Context.Service()("effect/httpapi/OpenApi/Deprecated") {}
+/**
+ * OpenAPI annotation for shallowly merging additional fields into a generated OpenAPI object.
+ *
+ * @category annotations
+ * @since 4.0.0
+ */
+export class Override extends /*#__PURE__*/Context.Service()("effect/httpapi/OpenApi/Override") {}
+/**
+ * OpenAPI annotation reference that excludes an annotated group or endpoint from the generated specification.
+ *
+ * @category annotations
+ * @since 4.0.0
+ */
+export const Exclude = /*#__PURE__*/Context.Reference("effect/httpapi/OpenApi/Exclude", {
+  defaultValue: constFalse
+});
+/**
+ * OpenAPI annotation for transforming a generated OpenAPI object.
+ *
+ * **Details**
+ *
+ * The function is applied during generation to the annotated API, group tag, or
+ * endpoint operation.
+ *
+ * @category annotations
+ * @since 4.0.0
+ */
+export class Transform extends /*#__PURE__*/Context.Service()("effect/httpapi/OpenApi/Transform") {}
+const servicesPartial = tags => {
+  const entries = Object.entries(tags);
+  return options => {
+    let context = Context.empty();
+    for (const [key, tag] of entries) {
+      if (options[key] !== undefined) {
+        context = Context.add(context, tag, options[key]);
+      }
+    }
+    return context;
+  };
+};
+/**
+ * Builds a `Context` containing OpenAPI annotations from the supplied options.
+ *
+ * @category annotations
+ * @since 4.0.0
+ */
+export const annotations = /*#__PURE__*/servicesPartial({
+  identifier: Identifier,
+  title: Title,
+  version: Version,
+  description: Description,
+  license: License,
+  summary: Summary,
+  deprecated: Deprecated,
+  externalDocs: ExternalDocs,
+  servers: Servers,
+  format: Format,
+  override: Override,
+  exclude: Exclude,
+  transform: Transform
+});
+const apiCache = /*#__PURE__*/new WeakMap();
+/**
+ * This function checks if a given tag exists within the provided context. If
+ * the tag is present, it retrieves the associated value and applies the given
+ * callback function to it. If the tag is not found, the function does nothing.
+ */
+function processAnnotation(ctx, annotation, f) {
+  const o = Context.getOption(ctx, annotation);
+  if (Option.isSome(o)) {
+    f(o.value);
+  }
+}
+/**
+ * Converts an `HttpApi` instance into an OpenAPI Specification object.
+ *
+ * **Details**
+ *
+ * This function takes an `HttpApi` instance, which defines a structured API,
+ * and generates an OpenAPI Specification (`OpenAPISpec`). The resulting spec
+ * adheres to the OpenAPI 3.1.0 standard and includes detailed metadata such as
+ * paths, operations, security schemes, and components. The function processes
+ * the API's annotations, middleware, groups, and endpoints to build a complete
+ * and accurate representation of the API in OpenAPI format.
+ *
+ * The function also deduplicates schemas, applies transformations, and
+ * integrates annotations like descriptions, summaries, external documentation,
+ * and overrides. Cached results are used for better performance when the same
+ * `HttpApi` instance is processed multiple times.
+ *
+ * @category constructors
+ * @since 4.0.0
+ */
+export function fromApi(api) {
+  const cached = apiCache.get(api);
+  if (cached !== undefined) {
+    return cached;
+  }
+  let spec = {
+    openapi: "3.1.0",
+    info: {
+      title: "Api",
+      version: "0.0.1"
+    },
+    paths: {},
+    components: {
+      schemas: {},
+      securitySchemes: {}
+    },
+    security: [],
+    tags: []
+  };
+  const pathOps = [];
+  processAnnotation(api.annotations, Title, title => {
+    spec.info.title = title;
+  });
+  processAnnotation(api.annotations, Version, version => {
+    spec.info.version = version;
+  });
+  processAnnotation(api.annotations, Description, description => {
+    spec.info.description = description;
+  });
+  processAnnotation(api.annotations, License, license => {
+    spec.info.license = license;
+  });
+  processAnnotation(api.annotations, Summary, summary => {
+    spec.info.summary = summary;
+  });
+  processAnnotation(api.annotations, Servers, servers => {
+    spec.servers = [...servers];
+  });
+  HttpApi.reflect(api, {
+    onGroup({
+      group
+    }) {
+      if (Context.get(group.annotations, Exclude)) {
+        return;
+      }
+      let tag = {
+        name: Context.getOrElse(group.annotations, Title, () => group.identifier)
+      };
+      processAnnotation(group.annotations, Description, description => {
+        tag.description = description;
+      });
+      processAnnotation(group.annotations, ExternalDocs, externalDocs => {
+        tag.externalDocs = externalDocs;
+      });
+      processAnnotation(group.annotations, Override, override => {
+        Object.assign(tag, override);
+      });
+      processAnnotation(group.annotations, Transform, transformFn => {
+        tag = transformFn(tag);
+      });
+      spec.tags.push(tag);
+    },
+    onEndpoint({
+      endpoint,
+      group,
+      mergedAnnotations,
+      middleware
+    }) {
+      if (Context.get(mergedAnnotations, Exclude)) {
+        return;
+      }
+      let op = {
+        tags: [Context.getOrElse(group.annotations, Title, () => group.identifier)],
+        operationId: Context.getOrElse(endpoint.annotations, Identifier, () => group.topLevel ? endpoint.name : `${group.identifier}.${endpoint.name}`),
+        parameters: [],
+        security: [],
+        responses: {}
+      };
+      const path = endpoint.path.replace(/:(\w+)\??/g, "{$1}");
+      const method = endpoint.method.toLowerCase();
+      function processRequestBodies(payloadMap) {
+        if (payloadMap.size > 0) {
+          const c = {};
+          let hasContent = false;
+          payloadMap.forEach(({
+            encoding,
+            schemas
+          }, contentType) => {
+            const filtered = schemas.filter(s => !HttpApiSchema.isNoContent(s.ast));
+            if (filtered.length === 0) return;
+            hasContent = true;
+            const asts = filtered.map(AST.getAST);
+            const ast = asts.length === 1 ? asts[0] : new AST.Union(asts, "anyOf");
+            pathOps.push({
+              _tag: "schema",
+              ast: toEncodingAST(ast, encoding._tag),
+              path: ["paths", path, method, "requestBody", "content", contentType, "schema"]
+            });
+            c[contentType] = {
+              schema: {}
+            };
+          });
+          if (hasContent) {
+            op.requestBody = {
+              content: c,
+              required: true
+            };
+          }
+        }
+      }
+      function processResponseBodies(bodies, defaultDescription) {
+        for (const [status, {
+          content,
+          descriptions
+        }] of bodies) {
+          const description = descriptions.size > 0 ? Array.from(descriptions).join(" | ") : defaultDescription();
+          op.responses[status] = {
+            description
+          };
+          if (content !== undefined) {
+            content.forEach((map, encoding) => {
+              map.forEach((schemas, contentType) => {
+                const asts = Array.from(schemas, AST.getAST);
+                const ast = asts.length === 1 ? asts[0] : new AST.Union(asts, "anyOf");
+                pathOps.push({
+                  _tag: "schema",
+                  ast: toEncodingAST(ast, encoding),
+                  path: ["paths", path, method, "responses", String(status), "content", contentType, "schema"]
+                });
+                op.responses[status].content ??= {};
+                op.responses[status].content[contentType] = {
+                  schema: {}
+                };
+              });
+            });
+          }
+        }
+      }
+      function processParameters(schema, i) {
+        if (schema) {
+          const ast = AST.getLastEncoding(schema.ast);
+          if (AST.isObjects(ast)) {
+            for (const ps of ast.propertySignatures) {
+              op.parameters.push({
+                name: String(ps.name),
+                in: i,
+                schema: {},
+                required: i === "path" || !AST.isOptional(ps.type)
+              });
+              pathOps.push({
+                _tag: "parameter",
+                ast: ps.type,
+                path: ["paths", path, method, "parameters", String(op.parameters.length - 1), "schema"]
+              });
+            }
+          }
+        }
+      }
+      processAnnotation(endpoint.annotations, Description, description => {
+        op.description = description;
+      });
+      processAnnotation(endpoint.annotations, Summary, summary => {
+        op.summary = summary;
+      });
+      processAnnotation(endpoint.annotations, Deprecated, deprecated => {
+        op.deprecated = deprecated;
+      });
+      processAnnotation(endpoint.annotations, ExternalDocs, externalDocs => {
+        op.externalDocs = externalDocs;
+      });
+      middleware.forEach(middleware => {
+        if (!HttpApiMiddleware.isSecurity(middleware)) {
+          return;
+        }
+        for (const [name, security] of Object.entries(middleware.security)) {
+          processHttpApiSecurity(name, security);
+          op.security.push({
+            [name]: []
+          });
+        }
+      });
+      function processHttpApiSecurity(name, security) {
+        if (spec.components.securitySchemes[name] !== undefined) {
+          return;
+        }
+        spec.components.securitySchemes[name] = makeSecurityScheme(security);
+      }
+      const hasBody = HttpMethod.hasBody(endpoint.method);
+      if (hasBody) {
+        processRequestBodies(endpoint.payload);
+      }
+      processParameters(endpoint.params, "path");
+      if (!hasBody && endpoint.payload.size === 1) {
+        const entry = endpoint.payload.values().next().value;
+        processParameters(entry.schemas[0], "query");
+      }
+      processParameters(endpoint.headers, "header");
+      processParameters(endpoint.query, "query");
+      processResponseBodies(extractResponseBodies(HttpApiEndpoint.getSuccessSchemas(endpoint), HttpApiSchema.getStatusSuccess, resolveDescriptionOrIdentifier), () => "Success");
+      processResponseBodies(extractResponseBodies(HttpApiEndpoint.getErrorSchemas(endpoint), HttpApiSchema.getStatusError, resolveDescriptionOrIdentifier), () => "Error");
+      if (!spec.paths[path]) {
+        spec.paths[path] = {};
+      }
+      processAnnotation(endpoint.annotations, Override, override => {
+        Object.assign(op, override);
+      });
+      processAnnotation(endpoint.annotations, Transform, transformFn => {
+        op = transformFn(op);
+      });
+      spec.paths[path][method] = op;
+    }
+  });
+  processAnnotation(api.annotations, HttpApi.AdditionalSchemas, componentSchemas => {
+    componentSchemas.forEach(componentSchema => {
+      const identifier = AST.resolveIdentifier(componentSchema.ast);
+      if (identifier !== undefined) {
+        if (identifier in spec.components.schemas) {
+          throw new globalThis.Error(`Duplicate component schema identifier: ${identifier}`);
+        }
+        spec.components.schemas[identifier] = {};
+        pathOps.push({
+          _tag: "schema",
+          ast: componentSchema.ast,
+          path: ["components", "schemas", identifier]
+        });
+      }
+    });
+  });
+  function escapePath(path) {
+    return "/" + path.map(escapeToken).join("/");
+  }
+  if (Arr.isArrayNonEmpty(pathOps)) {
+    const multiDocument = SchemaRepresentation.fromASTs(Arr.map(pathOps, op => op.ast));
+    const jsonSchemaMultiDocument = JsonSchema.toMultiDocumentOpenApi3_1(SchemaRepresentation.toJsonSchemaMultiDocument(multiDocument));
+    const patchOps = pathOps.map((op, i) => {
+      const oppath = escapePath(op.path);
+      const value = jsonSchemaMultiDocument.schemas[i];
+      return {
+        op: "replace",
+        path: oppath,
+        value: value
+      };
+    });
+    Object.entries(jsonSchemaMultiDocument.definitions).forEach(([name, definition]) => {
+      patchOps.push({
+        op: "add",
+        path: escapePath(["components", "schemas", name]),
+        value: definition
+      });
+    });
+    spec = JsonPatch.apply(patchOps, spec);
+  }
+  Object.keys(spec.components.schemas).forEach(key => {
+    if (!JsonSchema.VALID_OPEN_API_COMPONENTS_SCHEMAS_KEY_REGEXP.test(key)) {
+      throw new globalThis.Error(`Invalid component schema key: ${key}`);
+    }
+  });
+  processAnnotation(api.annotations, Override, override => {
+    Object.assign(spec, override);
+  });
+  processAnnotation(api.annotations, Transform, transformFn => {
+    spec = transformFn(spec);
+  });
+  apiCache.set(api, spec);
+  return spec;
+}
+function extractResponseBodies(schemas, getStatus, getDescription) {
+  const map = new Map();
+  schemas.forEach(process);
+  return map;
+  function process(schema) {
+    const ast = schema.ast;
+    const status = getStatus(ast);
+    if (HttpApiSchema.isNoContent(ast)) {
+      addNoContent(status, getDescription(schema.ast) ?? "<No Content>");
+    } else {
+      addContent(schema, status, HttpApiSchema.getResponseEncoding(ast));
+    }
+  }
+  function addNoContent(status, description) {
+    const statusMap = map.get(status);
+    if (statusMap === undefined) {
+      map.set(status, {
+        descriptions: new Set([description]),
+        content: undefined
+      });
+    } else {
+      if (description !== undefined) {
+        statusMap.descriptions.add(description);
+      }
+    }
+  }
+  function addContent(schema, status, encoding) {
+    const description = getDescription(schema.ast);
+    const statusMap = map.get(status);
+    const {
+      _tag,
+      contentType
+    } = encoding;
+    if (statusMap === undefined) {
+      map.set(status, {
+        descriptions: new Set(description !== undefined ? [description] : []),
+        content: new Map([[_tag, new Map([[contentType, new Set([schema])]])]])
+      });
+    } else {
+      if (statusMap.content !== undefined) {
+        // concat descriptions
+        if (description !== undefined) {
+          statusMap.descriptions.add(description);
+        }
+        const contentTypeMap = statusMap.content.get(_tag);
+        if (contentTypeMap === undefined) {
+          statusMap.content.set(_tag, new Map([[contentType, new Set([schema])]]));
+        } else {
+          const set = contentTypeMap.get(contentType);
+          if (set === undefined) {
+            contentTypeMap.set(contentType, new Set([schema]));
+          } else {
+            set.add(schema);
+          }
+        }
+      }
+    }
+  }
+}
+function resolveDescriptionOrIdentifier(ast) {
+  return AST.resolveDescription(ast) ?? AST.resolveIdentifier(ast);
+}
+const Uint8ArrayEncoding = /*#__PURE__*/Schema.String.annotate({
+  format: "binary"
+});
+function toEncodingAST(ast, _tag) {
+  switch (_tag) {
+    case "Uint8Array":
+      return Uint8ArrayEncoding.ast;
+    case "Text":
+      return Schema.String.ast;
+    case "FormUrlEncoded":
+    case "Json":
+      return ast;
+    case "Multipart":
+      return persistedFileToBinaryEncoding(ast);
+  }
+}
+function persistedFileToBinaryEncoding(ast) {
+  if (AST.isDeclaration(ast) && ast.annotations?.typeConstructor?._tag === "effect/http/PersistedFile") {
+    return Uint8ArrayEncoding.ast;
+  }
+  if (typeof ast?.recur === "function") {
+    return ast.recur(persistedFileToBinaryEncoding);
+  }
+  return ast;
+}
+const makeSecurityScheme = security => {
+  const meta = {};
+  processAnnotation(security.annotations, Description, description => {
+    meta.description = description;
+  });
+  switch (security._tag) {
+    case "Basic":
+      {
+        return {
+          ...meta,
+          type: "http",
+          scheme: "basic"
+        };
+      }
+    case "Bearer":
+      {
+        const format = Context.getOption(security.annotations, Format).pipe(Option.map(format => ({
+          bearerFormat: format
+        })), Option.getOrUndefined);
+        return {
+          ...meta,
+          type: "http",
+          scheme: "bearer",
+          ...format
+        };
+      }
+    case "ApiKey":
+      {
+        return {
+          ...meta,
+          type: "apiKey",
+          name: security.key,
+          in: security.in
+        };
+      }
+  }
+};
+//# sourceMappingURL=OpenApi.js.map

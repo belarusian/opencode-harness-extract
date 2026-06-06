@@ -1,0 +1,31 @@
+{
+  "name": "@opencode-harness/llm",
+  "version": "0.1.0",
+  "description": "Standalone LLM client extracted from opencode",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc --watch",
+    "test": "vitest"
+  },
+  "dependencies": {
+    "effect": "4.0.0-beta.70",
+    "@smithy/eventstream-codec": "4.2.14",
+    "@smithy/util-utf8": "4.2.2",
+    "aws4fetch": "1.0.20"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "typescript": "^5.7.2",
+    "vitest": "^3.0.0"
+  },
+  "keywords": [
+    "llm",
+    "effect",
+    "opencode"
+  ],
+  "license": "MIT"
+}

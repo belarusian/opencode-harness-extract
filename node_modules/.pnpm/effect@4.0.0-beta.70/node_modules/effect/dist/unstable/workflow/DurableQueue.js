@@ -1,0 +1,202 @@
+/**
+ * Durable queues bridge workflow executions with persisted background workers.
+ * A workflow calls `process` to enqueue a schema-encoded payload in a named
+ * `PersistedQueue`, attach a durable deferred token, and suspend until a worker
+ * records the handler's `Exit` back through that deferred.
+ *
+ * Use this module for workflow steps that should be delegated to independent
+ * workers: long-running side effects, rate-limited or concurrency-limited
+ * integrations, fan-out jobs, API calls, and other work that must survive
+ * workflow suspension, process restarts, or handoff to another service.
+ *
+ * Queue names, payload schemas, result schemas, and idempotency keys become
+ * persisted coordination state. Keep them deterministic and stable across
+ * deployments; changing them is a persistence migration. Delivery follows the
+ * underlying `PersistedQueue` semantics, so handlers should be idempotent and
+ * prepared for retries, duplicate observations, and worker restarts.
+ *
+ * @since 4.0.0
+ */
+import * as Effect from "../../Effect.js";
+import * as Layer from "../../Layer.js";
+import * as Schedule from "../../Schedule.js";
+import * as Schema from "../../Schema.js";
+import * as Tracer from "../../Tracer.js";
+import * as PersistedQueue from "../persistence/PersistedQueue.js";
+import * as Activity from "./Activity.js";
+import * as DurableDeferred from "./DurableDeferred.js";
+/**
+ * Runtime identifier attached to `DurableQueue` values.
+ *
+ * @category type IDs
+ * @since 4.0.0
+ */
+export const TypeId = "~effect/workflow/DurableQueue";
+/**
+ * A `DurableQueue` wraps a `PersistedQueue`, providing a way to wait for items
+ * to finish processing using a `DurableDeferred`.
+ *
+ * **Example** (Defining a durable queue with workers)
+ *
+ * ```ts
+ * import { Effect, Schema } from "effect"
+ * import { DurableQueue, Workflow } from "effect/unstable/workflow"
+ *
+ * // Define a DurableQueue that can be used to derive workers and offer items for
+ * // processing.
+ * const ApiQueue = DurableQueue.make({
+ *   name: "ApiQueue",
+ *   payload: {
+ *     id: Schema.String
+ *   },
+ *   success: Schema.Void,
+ *   error: Schema.Never,
+ *   idempotencyKey(payload) {
+ *     return payload.id
+ *   }
+ * })
+ *
+ * const MyWorkflow = Workflow.make({
+ *   name: "MyWorkflow",
+ *   payload: {
+ *     id: Schema.String
+ *   },
+ *   idempotencyKey: ({ id }) => id
+ * })
+ *
+ * const MyWorkflowLayer = MyWorkflow.toLayer(
+ *   Effect.fnUntraced(function*() {
+ *     // Add an item to the DurableQueue defined above.
+ *     //
+ *     // When the worker has finished processing the item, the workflow will
+ *     // resume.
+ *     //
+ *     yield* DurableQueue.process(ApiQueue, { id: "api-call-1" })
+ *
+ *     yield* Effect.log("Workflow succeeded!")
+ *   })
+ * )
+ *
+ * // Define a worker layer that can process items from the DurableQueue.
+ * const ApiWorker = DurableQueue.worker(
+ *   ApiQueue,
+ *   Effect.fnUntraced(function*({ id }) {
+ *     yield* Effect.log(`Worker processing API call with id: ${id}`)
+ *   }),
+ *   { concurrency: 5 } // Process up to 5 items concurrently
+ * )
+ * ```
+ *
+ * @category constructors
+ * @since 4.0.0
+ */
+export const make = options => ({
+  [TypeId]: TypeId,
+  name: options.name,
+  payloadSchema: Schema.isSchema(options.payload) ? options.payload : Schema.Struct(options.payload),
+  idempotencyKey: options.idempotencyKey,
+  deferred: DurableDeferred.make(`DurableQueue/${options.name}`, {
+    success: options.success,
+    error: options.error
+  })
+});
+const queueSchemas = /*#__PURE__*/new WeakMap();
+const getQueueSchema = payload => {
+  let schema = queueSchemas.get(payload);
+  if (!schema) {
+    schema = Schema.Struct({
+      token: DurableDeferred.Token,
+      traceId: Schema.String,
+      spanId: Schema.String,
+      sampled: Schema.Boolean,
+      payload
+    });
+    queueSchemas.set(payload, schema);
+  }
+  return schema;
+};
+/**
+ * Add an item to the queue and wait for a worker to process it.
+ *
+ * @category Processing
+ * @since 4.0.0
+ */
+export const process = /*#__PURE__*/Effect.fnUntraced(function* (self, fields, options) {
+  const payload = self.payloadSchema.make(fields);
+  const queueName = `DurableQueue/${self.name}`;
+  const queue = yield* PersistedQueue.make({
+    name: queueName,
+    schema: getQueueSchema(self.payloadSchema)
+  });
+  const id = yield* Activity.idempotencyKey(`${queueName}/${self.idempotencyKey(payload)}`);
+  const deferred = DurableDeferred.make(`${self.deferred.name}/${id}`, {
+    success: self.deferred.successSchema,
+    error: self.deferred.errorSchema
+  });
+  const token = yield* DurableDeferred.token(deferred);
+  yield* Effect.useSpan(`DurableQueue/${self.name}/process`, {
+    attributes: {
+      id
+    }
+  }, span => queue.offer({
+    token,
+    payload,
+    traceId: span.traceId,
+    spanId: span.spanId,
+    sampled: span.sampled
+  }, {
+    id
+  }).pipe(Effect.tapCause(Effect.logWarning), Effect.catchTag("SchemaError", Effect.die), Effect.retry(options?.retrySchedule ?? defaultRetrySchedule), Effect.orDie, Effect.annotateLogs({
+    package: "effect",
+    module: "DurableQueue",
+    fiber: "process",
+    queueName: self.name
+  })));
+  return yield* DurableDeferred.await(deferred);
+});
+const defaultRetrySchedule = /*#__PURE__*/Schedule.exponential(500, 1.5).pipe(/*#__PURE__*/Schedule.either(/*#__PURE__*/Schedule.spaced("1 minute")));
+/**
+ * Create a worker effect that processes items from the durable queue.
+ *
+ * @category Worker
+ * @since 4.0.0
+ */
+export const makeWorker = /*#__PURE__*/Effect.fnUntraced(function* (self, f, options) {
+  const queue = yield* PersistedQueue.make({
+    name: `DurableQueue/${self.name}`,
+    schema: getQueueSchema(self.payloadSchema)
+  });
+  const concurrency = options?.concurrency ?? 1;
+  const worker = queue.take(item_ => {
+    const item = item_;
+    return Effect.withSpan(f(item.payload).pipe(Effect.exit, Effect.flatMap(exit => DurableDeferred.done(self.deferred, {
+      token: item.token,
+      exit
+    })), Effect.asVoid), `DurableQueue/${self.name}/worker`, {
+      captureStackTrace: false,
+      parent: Tracer.externalSpan({
+        traceId: item.traceId,
+        spanId: item.spanId,
+        sampled: item.sampled
+      })
+    });
+  }).pipe(Effect.catchCause(Effect.logWarning), Effect.forever, Effect.annotateLogs({
+    package: "effect",
+    module: "DurableQueue",
+    fiber: "worker",
+    queueName: self.name
+  }));
+  yield* Effect.replicateEffect(worker, concurrency, {
+    concurrency,
+    discard: true
+  });
+  return yield* Effect.never;
+});
+/**
+ * Create a layer that runs workers for the durable queue.
+ *
+ * @category Worker
+ * @since 4.0.0
+ */
+export const worker = (self, f, options) => Layer.effectDiscard(Effect.forkScoped(makeWorker(self, f, options)));
+//# sourceMappingURL=DurableQueue.js.map

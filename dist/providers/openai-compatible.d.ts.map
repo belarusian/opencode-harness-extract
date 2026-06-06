@@ -1,0 +1,1 @@
+{"version":3,"file":"openai-compatible.d.ts","sourceRoot":"","sources":["../../src/providers/openai-compatible.ts"],"names":[],"mappings":"AAAA;;GAEG;AAEH,OAAO,KAAK,EAAE,kBAAkB,EAAE,oBAAoB,EAAE,MAAM,gBAAgB,CAAC;AAE/E,eAAO,MAAM,EAAE,sBAAsB,CAAC;AAEtC,eAAO,MAAM,QAAQ,EAAE,kBAGtB,CAAC;AAEF,eAAO,MAAM,SAAS,GAAI,UAAU,MAAM,KAAG,oBAI5C,CAAC"}

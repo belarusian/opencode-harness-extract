@@ -1,0 +1,204 @@
+/**
+ * A transactional deferred value — a write-once cell that can be read within transactions.
+ * Readers retry until a value is set; once set, the value is immutable.
+ *
+ * @since 4.0.0
+ */
+import * as Effect from "./Effect.js";
+import { dual } from "./Function.js";
+import { NodeInspectSymbol, toJson } from "./Inspectable.js";
+import * as O from "./Option.js";
+import { pipeArguments } from "./Pipeable.js";
+import { hasProperty } from "./Predicate.js";
+import * as Res from "./Result.js";
+import * as TxRef from "./TxRef.js";
+const TypeId = "~effect/transactions/TxDeferred";
+const TxDeferredProto = {
+  [NodeInspectSymbol]() {
+    return toJson(this);
+  },
+  toJSON() {
+    return {
+      _id: "TxDeferred"
+    };
+  },
+  pipe() {
+    return pipeArguments(this, arguments);
+  }
+};
+const makeTxDeferred = ref => {
+  const self = Object.create(TxDeferredProto);
+  self[TypeId] = TypeId;
+  self.ref = ref;
+  return self;
+};
+/**
+ * Creates a new empty `TxDeferred`.
+ *
+ * **Example** (Creating a transactional deferred)
+ *
+ * ```ts
+ * import { Effect, Option, TxDeferred } from "effect"
+ *
+ * const program = Effect.gen(function*() {
+ *   const deferred = yield* TxDeferred.make<string, Error>()
+ *   const state = yield* TxDeferred.poll(deferred)
+ *   console.log(Option.isNone(state)) // true
+ * })
+ * ```
+ *
+ * @category constructors
+ * @since 2.0.0
+ */
+export const make = () => Effect.map(TxRef.make(O.none()), makeTxDeferred);
+/**
+ * Reads the deferred value. Retries the transaction if the deferred has not
+ * been completed yet.
+ *
+ * **Example** (Awaiting a deferred value)
+ *
+ * ```ts
+ * import { Effect, TxDeferred } from "effect"
+ *
+ * const program = Effect.gen(function*() {
+ *   const deferred = yield* TxDeferred.make<number>()
+ *   yield* TxDeferred.succeed(deferred, 42)
+ *   const value = yield* TxDeferred.await(deferred)
+ *   console.log(value) // 42
+ * })
+ * ```
+ *
+ * @category getters
+ * @since 4.0.0
+ */
+const await_ = self => Effect.gen(function* () {
+  const option = yield* TxRef.get(self.ref);
+  if (O.isNone(option)) {
+    return yield* Effect.txRetry;
+  }
+  return Res.isSuccess(option.value) ? option.value.success : yield* Effect.fail(option.value.failure);
+}).pipe(Effect.tx);
+export {
+/**
+ * Reads the deferred value. Retries the transaction if the deferred has not
+ * been completed yet.
+ *
+ * @category getters
+ * @since 4.0.0
+ */
+await_ as await };
+/**
+ * Reads the current state of the deferred without retrying. Returns `None` if
+ * not yet completed.
+ *
+ * **Example** (Polling a deferred)
+ *
+ * ```ts
+ * import { Effect, Option, Result, TxDeferred } from "effect"
+ *
+ * const program = Effect.gen(function*() {
+ *   const deferred = yield* TxDeferred.make<number>()
+ *   const before = yield* TxDeferred.poll(deferred)
+ *   console.log(Option.isNone(before)) // true
+ *
+ *   yield* TxDeferred.succeed(deferred, 42)
+ *   const after = yield* TxDeferred.poll(deferred)
+ *   console.log(after) // Some(Success(42))
+ * })
+ * ```
+ *
+ * @category getters
+ * @since 2.0.0
+ */
+export const poll = self => TxRef.get(self.ref);
+/**
+ * Completes the deferred with a `Result`. Returns `true` if this was the first
+ * completion, `false` if already completed.
+ *
+ * **Example** (Completing with a result)
+ *
+ * ```ts
+ * import { Effect, Result, TxDeferred } from "effect"
+ *
+ * const program = Effect.gen(function*() {
+ *   const deferred = yield* TxDeferred.make<number, string>()
+ *   const first = yield* TxDeferred.done(deferred, Result.succeed(42))
+ *   console.log(first) // true
+ *   const second = yield* TxDeferred.done(deferred, Result.succeed(99))
+ *   console.log(second) // false
+ * })
+ * ```
+ *
+ * @category mutations
+ * @since 2.0.0
+ */
+export const done = /*#__PURE__*/dual(2, (self, result) => TxRef.modify(self.ref, current => {
+  if (O.isSome(current)) {
+    return [false, current];
+  }
+  return [true, O.some(result)];
+}));
+/**
+ * Completes the deferred with a success value. Returns `true` if this was the
+ * first completion, `false` if already completed.
+ *
+ * **Example** (Completing with a success value)
+ *
+ * ```ts
+ * import { Effect, TxDeferred } from "effect"
+ *
+ * const program = Effect.gen(function*() {
+ *   const deferred = yield* TxDeferred.make<number>()
+ *   const first = yield* TxDeferred.succeed(deferred, 42)
+ *   console.log(first) // true
+ *   const second = yield* TxDeferred.succeed(deferred, 99)
+ *   console.log(second) // false
+ * })
+ * ```
+ *
+ * @category mutations
+ * @since 2.0.0
+ */
+export const succeed = /*#__PURE__*/dual(2, (self, value) => done(self, Res.succeed(value)));
+/**
+ * Completes the deferred with a failure. Returns `true` if this was the first
+ * completion, `false` if already completed.
+ *
+ * **Example** (Completing with a failure)
+ *
+ * ```ts
+ * import { Effect, TxDeferred } from "effect"
+ *
+ * const program = Effect.gen(function*() {
+ *   const deferred = yield* TxDeferred.make<number, string>()
+ *   const first = yield* TxDeferred.fail(deferred, "boom")
+ *   console.log(first) // true
+ *   const second = yield* TxDeferred.fail(deferred, "boom2")
+ *   console.log(second) // false
+ * })
+ * ```
+ *
+ * @category mutations
+ * @since 2.0.0
+ */
+export const fail = /*#__PURE__*/dual(2, (self, error) => done(self, Res.fail(error)));
+/**
+ * Determines if the provided value is a `TxDeferred`.
+ *
+ * **Example** (Checking transactional deferreds)
+ *
+ * ```ts
+ * import { Effect, TxDeferred } from "effect"
+ *
+ * const program = Effect.gen(function*() {
+ *   const deferred = yield* TxDeferred.make<number>()
+ *   console.log(TxDeferred.isTxDeferred(deferred)) // true
+ *   console.log(TxDeferred.isTxDeferred("not a deferred")) // false
+ * })
+ * ```
+ *
+ * @category guards
+ * @since 4.0.0
+ */
+export const isTxDeferred = u => hasProperty(u, TypeId);
+//# sourceMappingURL=TxDeferred.js.map

@@ -1,0 +1,1 @@
+{"version":3,"file":"openai-chat.d.ts","sourceRoot":"","sources":["../../src/protocols/openai-chat.ts"],"names":[],"mappings":"AAAA;;GAEG;AAEH,eAAO,MAAM,UAAU,gBAAgB,CAAC;AAExC,MAAM,WAAW,OAAO;IACtB,IAAI,EAAE,QAAQ,GAAG,MAAM,GAAG,WAAW,CAAC;IACtC,OAAO,EAAE,MAAM,CAAC;CACjB"}
