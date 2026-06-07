@@ -54,10 +54,8 @@ This extract makes opencode's LLM infrastructure available as a standalone packa
 - ✅ Clean Effect v4 patterns
 
 ### What Was Left Behind (For Now)
-- Provider-specific clients (OpenAI, Anthropic, Google, etc.)
-- Protocol implementations (Anthropic Messages, Bedrock Converse, Gemini)
-- Caching policies
-- Tool execution runtime (partially extracted)
+- Provider-specific clients (OpenAI, Anthropic, Google, etc.) - Not needed, we use OpenAI-compatible API
+- Protocol implementations (Anthropic Messages, Bedrock Converse, Gemini) - Not needed
 
 ### Files from opencode to Compare
 - `/Users/av4nda/Code/opencode/packages/llm/src/` - Original source

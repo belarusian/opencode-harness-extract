@@ -22,14 +22,14 @@ Opencode's `packages/llm` is powerful but tightly coupled to the monorepo. This 
 
 ## Extraction Summary
 
-| Component | From opencode | In This Package |
-|-----------|---------------|-----------------|
-| LLMClient | `packages/llm/src/llm/client.ts` | ✅ `src/client.ts` |
-| Tool Execution | `packages/llm/src/tool-execution/` | ✅ `src/tool.ts` |
-| Streaming | `packages/llm/src/streaming/` | ✅ `src/streaming.ts` |
-| Caching | `packages/llm/src/cache/` | ✅ `src/cache.ts` |
-| Provider Clients | `packages/llm/src/providers/` | ❌ Not needed (OpenAI-compatible) |
-| Protocol Implementations | `packages/llm/src/protocols/` | ❌ Not needed |
+| Component | From opencode | In This Package | Status |
+|-----------|---------------|-----------------|--------|
+| LLMClient | `packages/llm/src/llm/client.ts` | ✅ `src/client.ts` | ✅ Done |
+| Tool Executor | `packages/llm/src/tool-execution/` | ✅ `src/tool.ts` | ✅ Done |
+| Streaming | `packages/llm/src/streaming/` | ✅ `src/streaming.ts` | ✅ Done |
+| Caching | `packages/llm/src/cache/` | ✅ `src/cache.ts` | ✅ Done |
+| Provider Clients | `packages/llm/src/providers/` | ❌ Not needed | N/A |
+| Protocol Implementations | `packages/llm/src/protocols/` | ❌ Not needed | N/A |
 
 ## Installation
 
@@ -207,11 +207,11 @@ export const CacheLayer = Layer.succeed(Cache, {
 | Feature | Status |
 |---------|--------|
 | LLMClient (generate/generateObject) | ✅ Done |
-| Tool execution | ✅ In progress |
-| Streaming | ✅ In progress |
-| Caching | ✅ In progress |
+| Tool execution runtime | ✅ Done (ToolExecutor with logging) |
+| SSE streaming support | ✅ Done (generateStream function) |
+| Caching layer | ✅ Done (Cache service) |
 | OpenAI-compatible provider | ✅ Done |
-| Provider abstraction | ⏭️ Not needed |
+| Tool result caching | ⏭️ Optional enhancement |
 
 ## License
 
