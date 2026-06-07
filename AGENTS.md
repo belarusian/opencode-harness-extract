@@ -222,21 +222,44 @@ LLM_BASE_URL=http://localhost:11434/v1 pnpm start
 
 ## Testing
 
+### Unit Tests
+
+Run all unit tests:
+
 ```bash
-# Run all tests
 pnpm test
-
-# Run specific test file
-pnpm test test/client.test.ts
-
-# Run with coverage
-pnpm test --coverage
 ```
 
+Run specific test file:
+
+```bash
+pnpm test test/client.test.ts
+pnpm test test/tool.test.ts
+pnpm test test/cache.test.ts
+```
+
+### Integration Tests
+
+Run the end-to-end integration test that calls a real LLM:
+
+```bash
+export LLM_BASE_URL="http://localhost:8080/v1"
+export LLM_API_KEY=""
+npx tsx test_integration.ts
+```
+
+This tests:
+- `generate()` - Text generation with caching
+- `generateObject()` - JSON generation
+- `generateStream()` - SSE streaming
+- `executeTool()` - Single tool execution
+- `executeTools()` - Parallel tool execution
+
 Tests are located in `test/`:
-- `cache.test.ts` - Cache service operations
+- `cache.test.ts` - Cache operations
 - `tool.test.ts` - Tool execution with retry and validation
 - `client.test.ts` - LLMClient integration tests
+- `test_integration.ts` - End-to-end integration with real LLM
 
 ## Debugging
 
