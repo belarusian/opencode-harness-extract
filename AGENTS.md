@@ -193,16 +193,20 @@ LLM_BASE_URL=http://localhost:11434/v1 pnpm start
 
 ## What to Implement Next
 
-### Priority 1: Parallel Tool Execution Results Aggregation
-The `executeTools()` method runs tools in parallel but doesn't yet:
-1. Aggregate tool results with individual success/failure tracking
-2. Provide partial success handling (some tools pass, some fail)
-3. Return structured results with tool names mapped to results/errors
-
 ### Lower Priority
 - Provider abstraction (optional - OpenAI-compatible is enough)
 - Protocol implementations (Anthropic, Bedrock, etc.)
 - Advanced caching policies (TTL, eviction)
+
+## Remaining from opencode/llm (Not Needed for Local-First)
+
+| Feature | opencode/llm | This Package |
+|---------|--------------|--------------|
+| `prepare()` method | ✅ Full request compilation | Not implemented (not needed) |
+| `LLMEvent` streaming | ✅ Full event stream | ✅ Content-only streaming |
+| Provider routes | ✅ OpenAI, Anthropic, Bedrock | Not implemented (not needed) |
+| Tool step count tracking | ✅ `stepCountIs` | Not implemented (not needed) |
+| GenerateObjectResponse wrapper | ✅ With usage/metadata | ✅ Raw JSON return |
 
 ## Status
 
