@@ -49,7 +49,7 @@ export interface LLMClientShape {
  */
 export declare const makeLLMClient: Layer.Layer<LLMClient, never, never>;
 /**
- * Layer for LLMClient with ToolExecutor
+ * Layer for LLMClient with ToolExecutor and Cache
  */
 export declare const LLMClientLayer: Layer.Layer<LLMClient, never, never>;
 export {};

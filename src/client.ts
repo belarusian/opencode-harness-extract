@@ -9,6 +9,7 @@ import * as Effect from "effect/Effect";
 import * as Context from "effect/Context";
 import * as Layer from "effect/Layer";
 import type { LLMConfig as Config } from "./config.js";
+import { Cache, CacheLayer } from "./cache.js";
 import { generateStream } from "./streaming.js";
 import { Tool, ToolExecutor, ToolExecutorLayer } from "./tool.js";
 
@@ -21,6 +22,20 @@ export interface LLMConfig {
   readonly apiKey?: string;
   readonly maxTokens?: number;
   readonly temperature?: number;
+}
+
+/**
+ * Generate a cache key for LLM requests
+ */
+function generateCacheKey(config: Config, messages: Array<{ role: string; content: string }>): string {
+  const keyData = {
+    baseUrl: config.baseUrl,
+    model: config.model,
+    maxTokens: config.maxTokens,
+    temperature: config.temperature,
+    messages: messages.map(m => ({ role: m.role, content: m.content })),
+  };
+  return `llm:${JSON.stringify(keyData)}`;
 }
 
 /**
@@ -63,6 +78,19 @@ export const makeLLMClient = Layer.succeed(
   {
     generate: (config: Config, messages: Array<{ role: string; content: string }>) =>
       Effect.gen(function* () {
+        const cacheKey = generateCacheKey(config, messages);
+        
+        // Try cache first (cache is provided by CacheLayer in LLMClientLayer)
+        const cached = yield* Effect.provide(CacheLayer)(Cache).pipe(
+          Effect.flatMap((cache) => cache.get<string>(cacheKey))
+        );
+        if (cached !== undefined) {
+          yield* Effect.logInfo(`[LLMClient] Cache hit for key: ${cacheKey}`);
+          return cached;
+        }
+        
+        yield* Effect.logInfo(`[LLMClient] Cache miss for key: ${cacheKey}`);
+        
         const requestBody = {
           model: config.model,
           messages: messages,
@@ -113,11 +141,34 @@ export const makeLLMClient = Layer.succeed(
         }
         jsonStr = jsonStr.trim();
 
+        // Store in cache
+        yield* Effect.provide(CacheLayer)(Cache).pipe(
+          Effect.flatMap((cache) => cache.set(cacheKey, jsonStr))
+        );
+        
         return jsonStr;
       }),
     
     generateObject: <T>(config: Config, messages: Array<{ role: string; content: string }>, _schema: unknown) =>
       Effect.gen(function* () {
+        const cacheKey = generateCacheKey(config, messages);
+        
+        // Try cache first (cache is provided by CacheLayer in LLMClientLayer)
+        const cached = yield* Effect.provide(CacheLayer)(Cache).pipe(
+          Effect.flatMap((cache) => cache.get<string>(cacheKey))
+        );
+        if (cached !== undefined) {
+          yield* Effect.logInfo(`[LLMClient] Cache hit for key: ${cacheKey}`);
+          try {
+            return JSON.parse(cached) as T;
+          } catch (error) {
+            yield* Effect.logError(`[LLMClient] Failed to parse cached response: ${error}`);
+            // Fall through to call LLM
+          }
+        }
+        
+        yield* Effect.logInfo(`[LLMClient] Cache miss for key: ${cacheKey}`);
+        
         const requestBody = {
           model: config.model,
           messages: messages,
@@ -170,7 +221,12 @@ export const makeLLMClient = Layer.succeed(
         jsonStr = jsonStr.trim();
 
         try {
-          return JSON.parse(jsonStr) as T;
+          const result = JSON.parse(jsonStr) as T;
+          // Store in cache
+          yield* Effect.provide(CacheLayer)(Cache).pipe(
+            Effect.flatMap((cache) => cache.set(cacheKey, jsonStr))
+          );
+          return result;
         } catch (error) {
           return yield* Effect.fail(new Error(`Failed to parse JSON: ${error}`));
         }
@@ -188,6 +244,6 @@ export const makeLLMClient = Layer.succeed(
 );
 
 /**
- * Layer for LLMClient with ToolExecutor
+ * Layer for LLMClient with ToolExecutor and Cache
  */
-export const LLMClientLayer = Layer.provide(ToolExecutorLayer)(makeLLMClient);
+export const LLMClientLayer = Layer.provide(ToolExecutorLayer)(Layer.provide(CacheLayer)(makeLLMClient));
