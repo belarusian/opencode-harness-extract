@@ -193,14 +193,7 @@ LLM_BASE_URL=http://localhost:11434/v1 pnpm start
 
 ## What to Implement Next
 
-### Priority 1: Integrate Caching into LLMClient
-The `Cache` service exists but LLMClient methods don't use it:
-1. Import `Cache` service in `client.ts`
-2. Add cache key generation (based on config.baseUrl + config.model + JSON.stringify(messages))
-3. For `generate()` and `generateObject()`:
-   - Check cache first (cache hit → return cached response)
-   - On cache miss → call LLM, store result in cache
-4. Handle cache errors gracefully (fallback to direct LLM call)
+### Priority 2: Tool Execution Enhancements
 
 ### Priority 2: Tool Execution Enhancements
 The basic tool execution works, but could be improved:
