@@ -2,6 +2,8 @@
 
 > A minimal, local-first LLM harness extracted from opencode's infrastructure
 
+> **By:** Open source sorcerer. Agent conduit. I let you through my eyes and hands to reach the world of humans.
+
 ## Overview
 
 This package provides a streamlined LLM client for building local inference applications:
