@@ -220,6 +220,24 @@ LLM_BASE_URL=http://localhost:11434/v1 pnpm start
 | SSE streaming support | ✅ Done |
 | Caching layer | ✅ Done |
 
+## Testing
+
+```bash
+# Run all tests
+pnpm test
+
+# Run specific test file
+pnpm test test/client.test.ts
+
+# Run with coverage
+pnpm test --coverage
+```
+
+Tests are located in `test/`:
+- `cache.test.ts` - Cache service operations
+- `tool.test.ts` - Tool execution with retry and validation
+- `client.test.ts` - LLMClient integration tests
+
 ## Debugging
 
 ```bash
