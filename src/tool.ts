@@ -10,6 +10,7 @@ export interface ToolSchema<T> {
   readonly name: string;
   readonly description: string;
   readonly execute: (input: T) => Effect.Effect<unknown, Error>;
+  readonly schema?: unknown; // Optional JSON schema for input validation
 }
 
 export interface Tool<T> {
@@ -20,14 +21,52 @@ export interface ToolFailure {
   readonly error: Error;
 }
 
+/**
+ * Create a tool with optional schema validation
+ */
 export function tool<T>(
   name: string,
   description: string,
   execute: (input: T) => Effect.Effect<unknown, Error>,
+  schema?: unknown,
 ): Tool<T> {
   return {
-    schema: { name, description, execute },
+    schema: { name, description, execute, schema },
   };
+}
+
+/**
+ * Validate tool input against JSON schema
+ */
+export function validateToolInput<T>(
+  input: unknown,
+  schema: unknown,
+): Effect.Effect<T, Error> {
+  return Effect.try({
+    try: () => {
+      if (!schema) {
+        return input as T;
+      }
+      // Simple schema validation - in production, use ajv or similar
+      if (typeof schema === "object" && schema !== null) {
+        const s = schema as Record<string, unknown>;
+        if (s.type === "object" && typeof input !== "object" || input === null) {
+          throw new Error(`Expected object, got ${typeof input}`);
+        }
+        if (s.type === "string" && typeof input !== "string") {
+          throw new Error(`Expected string, got ${typeof input}`);
+        }
+        if (s.type === "number" && typeof input !== "number") {
+          throw new Error(`Expected number, got ${typeof input}`);
+        }
+        if (s.type === "boolean" && typeof input !== "boolean") {
+          throw new Error(`Expected boolean, got ${typeof input}`);
+        }
+      }
+      return input as T;
+    },
+    catch: (error) => new Error(`Tool input validation failed: ${error}`),
+  });
 }
 
 /**
@@ -51,6 +90,12 @@ export const makeToolExecutor = Layer.succeed(
     execute: <T>(tool: Tool<T>, input: T) =>
       Effect.gen(function* () {
         yield* Effect.logInfo(`[ToolExecutor] Executing tool: ${tool.schema.name}`);
+        
+        // Validate input if schema is provided
+        if (tool.schema.schema) {
+          yield* Effect.logInfo(`[ToolExecutor] Validating input against schema`);
+          yield* validateToolInput<T>(input, tool.schema.schema);
+        }
         
         const result = yield* Effect.tapError(
           tool.schema.execute(input),

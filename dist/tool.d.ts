@@ -8,6 +8,7 @@ export interface ToolSchema<T> {
     readonly name: string;
     readonly description: string;
     readonly execute: (input: T) => Effect.Effect<unknown, Error>;
+    readonly schema?: unknown;
 }
 export interface Tool<T> {
     readonly schema: ToolSchema<T>;
@@ -15,7 +16,14 @@ export interface Tool<T> {
 export interface ToolFailure {
     readonly error: Error;
 }
-export declare function tool<T>(name: string, description: string, execute: (input: T) => Effect.Effect<unknown, Error>): Tool<T>;
+/**
+ * Create a tool with optional schema validation
+ */
+export declare function tool<T>(name: string, description: string, execute: (input: T) => Effect.Effect<unknown, Error>, schema?: unknown): Tool<T>;
+/**
+ * Validate tool input against JSON schema
+ */
+export declare function validateToolInput<T>(input: unknown, schema: unknown): Effect.Effect<T, Error>;
 declare const ToolExecutor_base: Context.ServiceClass<ToolExecutor, "opencode-harness/ToolExecutor", ToolExecutorShape>;
 /**
  * Tool execution service - executes tools with proper error handling
