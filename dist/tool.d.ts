@@ -33,6 +33,10 @@ export declare class ToolExecutor extends ToolExecutor_base {
 export interface ToolExecutorShape {
     readonly execute: <T>(tool: Tool<T>, input: T) => Effect.Effect<unknown, Error>;
     readonly executeWithRetry: <T>(tool: Tool<T>, input: T, maxRetries?: number, delayMs?: number) => Effect.Effect<unknown, Error>;
+    readonly executeTools: <T>(tools: Array<{
+        tool: Tool<T>;
+        input: T;
+    }>) => Effect.Effect<Array<unknown>, Error>;
 }
 /**
  * Tool executor implementation

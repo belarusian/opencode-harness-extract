@@ -89,6 +89,22 @@ export const makeToolExecutor = Layer.succeed(ToolExecutor, {
         yield* Effect.logError(`[ToolExecutor] Tool ${tool.schema.name} failed after ${maxRetries} attempts`);
         return yield* Effect.fail(lastError || new Error(`Tool ${tool.schema.name} failed after ${maxRetries} attempts`));
     }),
+    executeTools: (tools) => Effect.gen(function* () {
+        yield* Effect.logInfo(`[ToolExecutor] Executing ${tools.length} tools in parallel`);
+        const results = yield* Effect.forEach(tools, ({ tool, input }) => Effect.gen(function* () {
+            yield* Effect.logInfo(`[ToolExecutor] Executing tool: ${tool.schema.name}`);
+            // Validate input if schema is provided
+            if (tool.schema.schema) {
+                yield* Effect.logInfo(`[ToolExecutor] Validating input against schema`);
+                yield* validateToolInput(input, tool.schema.schema);
+            }
+            const result = yield* Effect.tapError(tool.schema.execute(input), (error) => Effect.logError(`[ToolExecutor] Tool ${tool.schema.name} failed: ${error.message}`));
+            yield* Effect.logInfo(`[ToolExecutor] Tool ${tool.schema.name} completed`);
+            return result;
+        }), { concurrency: "unbounded" });
+        yield* Effect.logInfo(`[ToolExecutor] All ${tools.length} tools completed`);
+        return results;
+    }),
 });
 /**
  * Layer for ToolExecutor
