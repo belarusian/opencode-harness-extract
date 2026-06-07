@@ -29,6 +29,9 @@
     "typescript": "^5.7.2",
     "vitest": "^3.2.6"
   },
+  "files": [
+    "dist"
+  ],
   "keywords": [
     "llm",
     "effect",
