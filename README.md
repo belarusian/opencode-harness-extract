@@ -201,6 +201,7 @@ export const CacheLayer = Layer.succeed(Cache, {
 ## Projects Using This
 
 - [anonize-ts](https://github.com/belarusian/anonize-ts) - PII anonymization tool
+- [resume-scanner-ts](https://github.com/belarusian/resume-scanner-ts) - Resume parsing and analysis
 
 ## Status
 
