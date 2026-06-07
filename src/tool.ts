@@ -5,6 +5,7 @@
 import * as Effect from "effect/Effect";
 import * as Context from "effect/Context";
 import * as Layer from "effect/Layer";
+import * as d from "effect/Duration";
 
 export interface ToolSchema<T> {
   readonly name: string;
@@ -79,6 +80,13 @@ export interface ToolExecutorShape {
     tool: Tool<T>,
     input: T,
   ) => Effect.Effect<unknown, Error>;
+
+  readonly executeWithRetry: <T>(
+    tool: Tool<T>,
+    input: T,
+    maxRetries?: number,
+    delayMs?: number,
+  ) => Effect.Effect<unknown, Error>;
 }
 
 /**
@@ -104,7 +112,40 @@ export const makeToolExecutor = Layer.succeed(
         
         yield* Effect.logInfo(`[ToolExecutor] Tool ${tool.schema.name} completed`);
         return result;
-      })
+      }),
+
+    executeWithRetry: <T>(tool: Tool<T>, input: T, maxRetries: number = 3, delayMs: number = 1000) =>
+      Effect.gen(function* () {
+        yield* Effect.logInfo(`[ToolExecutor] Executing tool with retry: ${tool.schema.name} (maxRetries=${maxRetries})`);
+        
+        let lastError: Error | undefined;
+        
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+          try {
+            yield* Effect.logInfo(`[ToolExecutor] Attempt ${attempt}/${maxRetries}`);
+            
+            // Validate input if schema is provided
+            if (tool.schema.schema) {
+              yield* validateToolInput<T>(input, tool.schema.schema);
+            }
+            
+            const result = yield* tool.schema.execute(input);
+            yield* Effect.logInfo(`[ToolExecutor] Tool ${tool.schema.name} succeeded on attempt ${attempt}`);
+            return result;
+          } catch (error) {
+            lastError = error as Error;
+            yield* Effect.logError(`[ToolExecutor] Attempt ${attempt} failed: ${lastError.message}`);
+            
+            if (attempt < maxRetries) {
+              yield* Effect.logInfo(`[ToolExecutor] Retrying in ${delayMs}ms...`);
+              yield* Effect.sleep(d.fromInputUnsafe(delayMs));
+            }
+          }
+        }
+        
+        yield* Effect.logError(`[ToolExecutor] Tool ${tool.schema.name} failed after ${maxRetries} attempts`);
+        return yield* Effect.fail(lastError || new Error(`Tool ${tool.schema.name} failed after ${maxRetries} attempts`));
+      }),
   }
 );
 
