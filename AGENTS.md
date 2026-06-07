@@ -193,26 +193,29 @@ LLM_BASE_URL=http://localhost:11434/v1 pnpm start
 
 ## What to Implement Next
 
-### Priority 1: Fix Streaming Implementation
-The current `generateStream` in `client.ts` returns `Effect.void` as a placeholder. To complete streaming:
+### Priority 1: Integrate Streaming into LLMClient
+The `generateStream` function exists in `streaming.ts` but isn't integrated into `LLMClient`:
 1. Update `LLMClientShape.generateStream` to return `Stream.Stream<string, Error>` (from `effect/Stream`)
-2. Implement proper SSE streaming in `generateStream` function
-3. Parse chunked responses and yield content
+2. Import and use the `generateStream` function from `./streaming.js`
+3. Convert async generator to Effect using `Stream.fromAsyncGenerator`
 4. Handle errors during streaming
 
-### Priority 2: Caching Integration
-The cache service exists but isn't integrated with LLMClient yet:
-1. Integrate `Cache` into `LLMClient` methods
-2. Add cache key generation (based on config + messages)
-3. Handle cache misses (call LLM, store result)
-4. Handle cache hits (return cached response)
+### Priority 2: Integrate Caching into LLMClient
+The `Cache` service exists but LLMClient methods don't use it:
+1. Import `Cache` service in `client.ts`
+2. Add cache key generation (based on config.baseUrl + config.model + JSON.stringify(messages))
+3. For `generate()` and `generateObject()`:
+   - Check cache first (cache hit → return cached response)
+   - On cache miss → call LLM, store result in cache
+4. Handle cache errors gracefully (fallback to direct LLM call)
 
 ### Priority 3: Tool Execution Enhancements
-The basic tool execution is working, but could be improved:
-1. Add tool result caching (cache tool execution results)
-2. Implement tool schema validation
-3. Add tool execution retry logic
-4. Support parallel tool execution
+The basic tool execution works, but could be improved:
+1. **Tool result caching** - Cache tool execution results to avoid re-computation
+2. **Tool schema validation** - Validate tool input against schema before execution
+3. **Tool execution retry** - Retry failed tool calls with exponential backoff
+4. **Parallel tool execution** - Support running multiple tools in parallel
+5. **Tool result parsing** - Parse and validate tool output
 
 ### Lower Priority
 - Provider abstraction (optional - OpenAI-compatible is enough)
