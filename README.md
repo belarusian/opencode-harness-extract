@@ -34,7 +34,7 @@ Opencode's `packages/llm` is powerful but tightly coupled to the monorepo. This 
 ## Installation
 
 ```bash
-pnpm add @opencode-harness/llm effect
+pnpm add github:belarusian/opencode-harness-extract effect
 ```
 
 ## Quick Start
