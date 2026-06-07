@@ -20,6 +20,17 @@ Opencode's `packages/llm` is powerful but tightly coupled to the monorepo. This 
 2. **OpenAI-compatible API** - No need for provider-specific clients
 3. **Real features** - Tool execution, streaming, caching
 
+## Extraction Summary
+
+| Component | From opencode | In This Package |
+|-----------|---------------|-----------------|
+| LLMClient | `packages/llm/src/llm/client.ts` | ✅ `src/client.ts` |
+| Tool Execution | `packages/llm/src/tool-execution/` | ✅ `src/tool.ts` |
+| Streaming | `packages/llm/src/streaming/` | ✅ `src/streaming.ts` |
+| Caching | `packages/llm/src/cache/` | ✅ `src/cache.ts` |
+| Provider Clients | `packages/llm/src/providers/` | ❌ Not needed (OpenAI-compatible) |
+| Protocol Implementations | `packages/llm/src/protocols/` | ❌ Not needed |
+
 ## Installation
 
 ```bash
