@@ -100,7 +100,11 @@ export const makeToolExecutor = Layer.succeed(ToolExecutor, {
             }
             const result = yield* Effect.tapError(tool.schema.execute(input), (error) => Effect.logError(`[ToolExecutor] Tool ${tool.schema.name} failed: ${error.message}`));
             yield* Effect.logInfo(`[ToolExecutor] Tool ${tool.schema.name} completed`);
-            return result;
+            return {
+                tool: tool.schema.name,
+                success: true,
+                result,
+            };
         }), { concurrency: "unbounded" });
         yield* Effect.logInfo(`[ToolExecutor] All ${tools.length} tools completed`);
         return results;

@@ -90,7 +90,7 @@ export interface ToolExecutorShape {
 
   readonly executeTools: <T>(
     tools: Array<{ tool: Tool<T>; input: T }>,
-  ) => Effect.Effect<Array<unknown>, Error>;
+  ) => Effect.Effect<Array<{ tool: string; success: boolean; result?: unknown; error?: Error }>, Error>;
 }
 
 /**
@@ -173,13 +173,17 @@ export const makeToolExecutor = Layer.succeed(
               );
               
               yield* Effect.logInfo(`[ToolExecutor] Tool ${tool.schema.name} completed`);
-              return result;
+              return {
+                tool: tool.schema.name,
+                success: true,
+                result,
+              } as const;
             }),
           { concurrency: "unbounded" }
         );
         
         yield* Effect.logInfo(`[ToolExecutor] All ${tools.length} tools completed`);
-        return results;
+        return results as Array<{ tool: string; success: boolean; result?: unknown; error?: Error }>;
       }),
   }
 );

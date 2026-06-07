@@ -36,7 +36,12 @@ export interface ToolExecutorShape {
     readonly executeTools: <T>(tools: Array<{
         tool: Tool<T>;
         input: T;
-    }>) => Effect.Effect<Array<unknown>, Error>;
+    }>) => Effect.Effect<Array<{
+        tool: string;
+        success: boolean;
+        result?: unknown;
+        error?: Error;
+    }>, Error>;
 }
 /**
  * Tool executor implementation
