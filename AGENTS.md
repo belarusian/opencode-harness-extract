@@ -240,7 +240,9 @@ pnpm test test/cache.test.ts
 
 ### Integration Tests
 
-Run the end-to-end integration test that calls a real LLM:
+**Note:** Integration tests require a running LLM endpoint (like llama.cpp or ollama).
+
+Run the end-to-end integration test:
 
 ```bash
 export LLM_BASE_URL="http://localhost:8080/v1"
@@ -248,12 +250,14 @@ export LLM_API_KEY=""
 npx tsx test_integration.ts
 ```
 
-This tests:
+This tests all features with a real LLM:
 - `generate()` - Text generation with caching
 - `generateObject()` - JSON generation
 - `generateStream()` - SSE streaming
 - `executeTool()` - Single tool execution
 - `executeTools()` - Parallel tool execution
+
+**For CI/CD:** Unit tests only (no real LLM required)
 
 Tests are located in `test/`:
 - `cache.test.ts` - Cache operations
