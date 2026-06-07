@@ -193,14 +193,7 @@ LLM_BASE_URL=http://localhost:11434/v1 pnpm start
 
 ## What to Implement Next
 
-### Priority 1: Integrate Streaming into LLMClient
-The `generateStream` function exists in `streaming.ts` but isn't integrated into `LLMClient`:
-1. Update `LLMClientShape.generateStream` to return `Stream.Stream<string, Error>` (from `effect/Stream`)
-2. Import and use the `generateStream` function from `./streaming.js`
-3. Convert async generator to Effect using `Stream.fromAsyncGenerator`
-4. Handle errors during streaming
-
-### Priority 2: Integrate Caching into LLMClient
+### Priority 1: Integrate Caching into LLMClient
 The `Cache` service exists but LLMClient methods don't use it:
 1. Import `Cache` service in `client.ts`
 2. Add cache key generation (based on config.baseUrl + config.model + JSON.stringify(messages))
@@ -209,7 +202,7 @@ The `Cache` service exists but LLMClient methods don't use it:
    - On cache miss → call LLM, store result in cache
 4. Handle cache errors gracefully (fallback to direct LLM call)
 
-### Priority 3: Tool Execution Enhancements
+### Priority 2: Tool Execution Enhancements
 The basic tool execution works, but could be improved:
 1. **Tool result caching** - Cache tool execution results to avoid re-computation
 2. **Tool schema validation** - Validate tool input against schema before execution

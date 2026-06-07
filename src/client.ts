@@ -9,6 +9,7 @@ import * as Effect from "effect/Effect";
 import * as Context from "effect/Context";
 import * as Layer from "effect/Layer";
 import type { LLMConfig as Config } from "./config.js";
+import { generateStream } from "./streaming.js";
 import { Tool, ToolExecutor, ToolExecutorLayer } from "./tool.js";
 
 /**
@@ -45,7 +46,7 @@ export interface LLMClientShape {
   readonly generateStream: (
     config: Config,
     messages: Array<{ role: string; content: string }>,
-  ) => Effect.Effect<void, Error>;
+  ) => Effect.Effect<AsyncGenerator<string, void, unknown>, Error>;
 
   readonly executeTool: <T>(
     tool: Tool<T>,
@@ -175,8 +176,8 @@ export const makeLLMClient = Layer.succeed(
         }
       }),
 
-    generateStream: (_config: Config, _messages: Array<{ role: string; content: string }>) =>
-      Effect.void,
+    generateStream: (config: Config, messages: Array<{ role: string; content: string }>) =>
+      Effect.succeed(generateStream(config, messages)),
 
     executeTool: <T>(tool: Tool<T>, input: T) =>
       Effect.gen(function* () {

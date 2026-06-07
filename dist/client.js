@@ -7,6 +7,7 @@
 import * as Effect from "effect/Effect";
 import * as Context from "effect/Context";
 import * as Layer from "effect/Layer";
+import { generateStream } from "./streaming.js";
 import { ToolExecutor, ToolExecutorLayer } from "./tool.js";
 /**
  * Service for the LLM client.
@@ -116,7 +117,7 @@ export const makeLLMClient = Layer.succeed(LLMClient, {
             return yield* Effect.fail(new Error(`Failed to parse JSON: ${error}`));
         }
     }),
-    generateStream: (_config, _messages) => Effect.void,
+    generateStream: (config, messages) => Effect.succeed(generateStream(config, messages)),
     executeTool: (tool, input) => Effect.gen(function* () {
         const toolExecutor = yield* ToolExecutor;
         return yield* toolExecutor.execute(tool, input);

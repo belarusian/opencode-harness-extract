@@ -40,7 +40,7 @@ export interface LLMClientShape {
     readonly generateStream: (config: Config, messages: Array<{
         role: string;
         content: string;
-    }>) => Effect.Effect<void, Error>;
+    }>) => Effect.Effect<AsyncGenerator<string, void, unknown>, Error>;
     readonly executeTool: <T>(tool: Tool<T>, input: T) => Effect.Effect<unknown, Error>;
 }
 /**
