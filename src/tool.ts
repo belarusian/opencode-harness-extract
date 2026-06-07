@@ -5,7 +5,6 @@
 import * as Effect from "effect/Effect";
 import * as Context from "effect/Context";
 import * as Layer from "effect/Layer";
-import * as d from "effect/Duration";
 
 export interface ToolSchema<T> {
   readonly name: string;
@@ -122,33 +121,19 @@ export const makeToolExecutor = Layer.succeed(
       Effect.gen(function* () {
         yield* Effect.logInfo(`[ToolExecutor] Executing tool with retry: ${tool.schema.name} (maxRetries=${maxRetries})`);
         
-        let lastError: Error | undefined;
-        
-        for (let attempt = 1; attempt <= maxRetries; attempt++) {
-          try {
-            yield* Effect.logInfo(`[ToolExecutor] Attempt ${attempt}/${maxRetries}`);
-            
+        return yield* Effect.retry(
+          Effect.gen(function* () {
             // Validate input if schema is provided
             if (tool.schema.schema) {
               yield* validateToolInput<T>(input, tool.schema.schema);
             }
             
             const result = yield* tool.schema.execute(input);
-            yield* Effect.logInfo(`[ToolExecutor] Tool ${tool.schema.name} succeeded on attempt ${attempt}`);
+            yield* Effect.logInfo(`[ToolExecutor] Tool ${tool.schema.name} succeeded`);
             return result;
-          } catch (error) {
-            lastError = error as Error;
-            yield* Effect.logError(`[ToolExecutor] Attempt ${attempt} failed: ${lastError.message}`);
-            
-            if (attempt < maxRetries) {
-              yield* Effect.logInfo(`[ToolExecutor] Retrying in ${delayMs}ms...`);
-              yield* Effect.sleep(d.fromInputUnsafe(delayMs));
-            }
-          }
-        }
-        
-        yield* Effect.logError(`[ToolExecutor] Tool ${tool.schema.name} failed after ${maxRetries} attempts`);
-        return yield* Effect.fail(lastError || new Error(`Tool ${tool.schema.name} failed after ${maxRetries} attempts`));
+          }),
+          { times: maxRetries, delay: { fixed: delayMs } }
+        );
       }),
 
     executeTools: <T>(tools: Array<{ tool: Tool<T>; input: T }>) =>
@@ -178,7 +163,15 @@ export const makeToolExecutor = Layer.succeed(
                 success: true,
                 result,
               } as const;
-            }),
+            }).pipe(
+              Effect.catch((error) =>
+                Effect.succeed({
+                  tool: tool.schema.name,
+                  success: false,
+                  error,
+                } as const)
+              )
+            ),
           { concurrency: "unbounded" }
         );
         

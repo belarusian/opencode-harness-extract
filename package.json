@@ -12,15 +12,15 @@
     "test": "vitest"
   },
   "dependencies": {
-    "effect": "4.0.0-beta.70",
     "@smithy/eventstream-codec": "4.2.14",
     "@smithy/util-utf8": "4.2.2",
-    "aws4fetch": "1.0.20"
+    "aws4fetch": "1.0.20",
+    "effect": "4.0.0-beta.70"
   },
   "devDependencies": {
-    "@types/node": "^22.13.0",
+    "@types/node": "^22.19.19",
     "typescript": "^5.7.2",
-    "vitest": "^3.0.0"
+    "vitest": "^3.2.6"
   },
   "keywords": [
     "llm",

@@ -163,6 +163,10 @@ export const makeLLMClient = Layer.succeed(LLMClient, {
         const toolExecutor = yield* ToolExecutor;
         return yield* toolExecutor.execute(tool, input);
     }).pipe(Effect.provide(ToolExecutorLayer)),
+    executeTools: (tools) => Effect.gen(function* () {
+        const toolExecutor = yield* ToolExecutor;
+        return yield* toolExecutor.executeTools(tools);
+    }).pipe(Effect.provide(ToolExecutorLayer)),
 });
 /**
  * Layer for LLMClient with ToolExecutor and Cache

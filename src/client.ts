@@ -67,6 +67,10 @@ export interface LLMClientShape {
     tool: Tool<T>,
     input: T,
   ) => Effect.Effect<unknown, Error>;
+
+  readonly executeTools: <T>(
+    tools: Array<{ tool: Tool<T>; input: T }>,
+  ) => Effect.Effect<Array<{ tool: string; success: boolean; result?: unknown; error?: Error }>, Error>;
 }
 
 /**
@@ -239,6 +243,12 @@ export const makeLLMClient = Layer.succeed(
       Effect.gen(function* () {
         const toolExecutor = yield* ToolExecutor;
         return yield* toolExecutor.execute(tool, input);
+      }).pipe(Effect.provide(ToolExecutorLayer)),
+
+    executeTools: <T>(tools: Array<{ tool: Tool<T>; input: T }>) =>
+      Effect.gen(function* () {
+        const toolExecutor = yield* ToolExecutor;
+        return yield* toolExecutor.executeTools(tools);
       }).pipe(Effect.provide(ToolExecutorLayer)),
   }
 );

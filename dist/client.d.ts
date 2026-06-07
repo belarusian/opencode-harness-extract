@@ -42,6 +42,15 @@ export interface LLMClientShape {
         content: string;
     }>) => Effect.Effect<AsyncGenerator<string, void, unknown>, Error>;
     readonly executeTool: <T>(tool: Tool<T>, input: T) => Effect.Effect<unknown, Error>;
+    readonly executeTools: <T>(tools: Array<{
+        tool: Tool<T>;
+        input: T;
+    }>) => Effect.Effect<Array<{
+        tool: string;
+        success: boolean;
+        result?: unknown;
+        error?: Error;
+    }>, Error>;
 }
 /**
  * Create the LLM client implementation.
