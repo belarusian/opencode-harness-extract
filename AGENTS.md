@@ -193,20 +193,28 @@ LLM_BASE_URL=http://localhost:11434/v1 pnpm start
 
 ## What to Implement Next
 
-### Priority 2: Tool Execution Enhancements
-
-### Priority 2: Tool Execution Enhancements
-The basic tool execution works, but could be improved:
-1. **Tool result caching** - Cache tool execution results to avoid re-computation
-2. **Tool schema validation** - Validate tool input against schema before execution
-3. **Tool execution retry** - Retry failed tool calls with exponential backoff
-4. **Parallel tool execution** - Support running multiple tools in parallel
-5. **Tool result parsing** - Parse and validate tool output
+### Priority 1: Parallel Tool Execution Results Aggregation
+The `executeTools()` method runs tools in parallel but doesn't yet:
+1. Aggregate tool results with individual success/failure tracking
+2. Provide partial success handling (some tools pass, some fail)
+3. Return structured results with tool names mapped to results/errors
 
 ### Lower Priority
 - Provider abstraction (optional - OpenAI-compatible is enough)
 - Protocol implementations (Anthropic, Bedrock, etc.)
 - Advanced caching policies (TTL, eviction)
+
+## Status
+
+| Feature | Status |
+|---------|--------|
+| LLMClient (generate/generateObject) | ✅ Done |
+| Tool execution runtime | ✅ Done |
+| Tool schema validation | ✅ Done |
+| Tool execution retry | ✅ Done |
+| Parallel tool execution | ✅ Done |
+| SSE streaming support | ✅ Done |
+| Caching layer | ✅ Done |
 
 ## Debugging
 
