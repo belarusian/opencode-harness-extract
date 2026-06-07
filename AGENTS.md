@@ -78,7 +78,7 @@ This extract makes opencode's LLM infrastructure available as a standalone packa
 
 3. **Local-First** - Works with llama.cpp, ollama, vllm, or any OpenAI-compatible endpoint. No provider-specific clients needed.
 
-4. **No Context Service Pattern** - Configuration is passed directly to the LLMClient.
+4. **Service Pattern with Context** - Uses `Context.Service` and `Context.Tag` for dependency injection (Effect v4 pattern).
 
 ## Architecture
 
