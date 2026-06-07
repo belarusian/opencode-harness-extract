@@ -208,10 +208,15 @@ export const CacheLayer = Layer.succeed(Cache, {
 |---------|--------|
 | LLMClient (generate/generateObject) | ✅ Done |
 | Tool execution runtime | ✅ Done (ToolExecutor with logging) |
+| Tool schema validation | ✅ Done |
+| Tool execution retry | ✅ Done |
 | SSE streaming support | ✅ Done (generateStream function) |
 | Caching layer | ✅ Done (Cache service) |
 | OpenAI-compatible provider | ✅ Done |
-| Tool result caching | ⏭️ Optional enhancement |
+
+## License
+
+MIT
 
 ## License
 
