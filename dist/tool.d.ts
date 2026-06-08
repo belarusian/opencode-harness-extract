@@ -1,78 +1,79 @@
 /**
- * Tool execution utilities
+ * Tool execution with proper definitions, context, and result formatting.
+ *
+ * Matches opencode/llm's Tool interface:
+ * - Tool: description + parameters JSON Schema + execute handler
+ * - ToolExecuteContext: callID, name
+ * - ToolFailure: structured error type
+ * - ToolResultValue: text/json/error/content union for results
  */
 import * as Effect from "effect/Effect";
 import * as Context from "effect/Context";
 import * as Layer from "effect/Layer";
-export interface ToolSchema<T> {
+import * as Schema from "effect/Schema";
+import type { ToolCallID } from "./schema/index.js";
+import type { ToolResultValue } from "./schema/messages.js";
+declare const ToolFailure_base: Schema.Class<ToolFailure, Schema.TaggedStruct<"ToolFailure", {
+    readonly message: Schema.String;
+}>, import("effect/Cause").YieldableError>;
+export declare class ToolFailure extends ToolFailure_base {
+}
+/** Type alias for ToolFailure instance. */
+export type ToolFailureType = InstanceType<typeof ToolFailure>;
+export interface ToolExecuteContext {
+    readonly id: ToolCallID;
+    readonly name: string;
+}
+/**
+ * A type-safe LLM tool.
+ */
+export interface Tool {
     readonly name: string;
     readonly description: string;
-    readonly execute: (input: T) => Effect.Effect<unknown, Error>;
-    readonly schema?: unknown;
-}
-export interface Tool<T> {
-    readonly schema: ToolSchema<T>;
-}
-export interface ToolFailure {
-    readonly error: Error;
+    /** JSON Schema for tool input parameters */
+    readonly jsonSchema: Record<string, unknown>;
+    readonly execute?: (params: unknown, context: ToolExecuteContext) => Effect.Effect<unknown, ToolFailureType>;
 }
 /**
- * Create a tool with optional schema validation
+ * Create a dynamic tool with JSON Schema.
  */
-export declare function tool<T>(name: string, description: string, execute: (input: T) => Effect.Effect<unknown, Error>, schema?: unknown): Tool<T>;
+export declare function makeDynamicTool(name: string, description: string, jsonSchema: Record<string, unknown>, execute?: (params: unknown, context: ToolExecuteContext) => Effect.Effect<unknown, ToolFailureType>): Tool;
 /**
- * Validate tool input against JSON schema
+ * Build a ToolDefinition-compatible object from a Tool.
+ * This can be passed to LLM APIs that expect tool definitions.
  */
-export declare function validateToolInput<T>(input: unknown, schema: unknown): Effect.Effect<T, Error>;
+export declare function toToolDefinition(tool: Tool): {
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+};
+/**
+ * Format a tool execution result into ToolResultValue.
+ */
+export declare function formatToolResult(result: unknown): ToolResultValue;
 declare const ToolExecutor_base: Context.ServiceClass<ToolExecutor, "opencode-harness/ToolExecutor", ToolExecutorShape>;
-/**
- * Tool execution service - executes tools with proper error handling
- */
 export declare class ToolExecutor extends ToolExecutor_base {
 }
 export interface ToolExecutorShape {
-    readonly execute: <T>(tool: Tool<T>, input: T) => Effect.Effect<unknown, Error>;
-    readonly executeWithRetry: <T>(tool: Tool<T>, input: T, maxRetries?: number, delayMs?: number) => Effect.Effect<unknown, Error>;
-    readonly executeTools: <T>(tools: Array<{
-        tool: Tool<T>;
-        input: T;
+    /**
+     * Execute a single tool with the given input.
+     */
+    readonly execute: (tool: Tool, input: unknown, context: ToolExecuteContext) => Effect.Effect<ToolResultValue, ToolFailureType>;
+    /**
+     * Execute multiple tools in parallel.
+     */
+    readonly executeTools: (tools: Array<{
+        tool: Tool;
+        input: unknown;
+        context: ToolExecuteContext;
     }>) => Effect.Effect<Array<{
-        tool: string;
+        name: string;
         success: boolean;
-        result?: unknown;
-        error?: Error;
-    }>, Error>;
+        result?: ToolResultValue;
+        error?: ToolFailureType;
+    }>>;
 }
-/**
- * Tool executor implementation
- */
 export declare const makeToolExecutor: Layer.Layer<ToolExecutor, never, never>;
-/**
- * Layer for ToolExecutor
- */
 export declare const ToolExecutorLayer: Layer.Layer<ToolExecutor, never, never>;
-declare const ToolCache_base: Context.ServiceClass<ToolCache, "opencode-harness/ToolCache", ToolCacheShape>;
-/**
- * Tool cache for caching tool execution results
- */
-export declare class ToolCache extends ToolCache_base {
-}
-export interface ToolCacheShape {
-    readonly get: <T>(key: string) => Effect.Effect<T | undefined, Error>;
-    readonly set: <T>(key: string, value: T) => Effect.Effect<void, Error>;
-    readonly clear: () => Effect.Effect<void, Error>;
-}
-/**
- * In-memory tool cache implementation
- */
-export declare const makeToolCache: Layer.Layer<ToolCache, never, never>;
-/**
- * Layer for ToolCache
- */
-export declare const ToolCacheLayer: Layer.Layer<ToolCache, never, never>;
-/**
- * Combined layer for tool execution with caching
- */
-export declare const ToolLayer: Layer.Layer<ToolExecutor, never, never>;
 export {};
 //# sourceMappingURL=tool.d.ts.map

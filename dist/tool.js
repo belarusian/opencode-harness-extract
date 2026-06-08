@@ -1,136 +1,90 @@
 /**
- * Tool execution utilities
+ * Tool execution with proper definitions, context, and result formatting.
+ *
+ * Matches opencode/llm's Tool interface:
+ * - Tool: description + parameters JSON Schema + execute handler
+ * - ToolExecuteContext: callID, name
+ * - ToolFailure: structured error type
+ * - ToolResultValue: text/json/error/content union for results
  */
 import * as Effect from "effect/Effect";
 import * as Context from "effect/Context";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
+// --- ToolFailure ---
+export class ToolFailure extends Schema.TaggedErrorClass()("ToolFailure", {
+    message: Schema.String,
+}) {
+}
 /**
- * Create a tool with optional schema validation
+ * Create a dynamic tool with JSON Schema.
  */
-export function tool(name, description, execute, schema) {
+export function makeDynamicTool(name, description, jsonSchema, execute) {
     return {
-        schema: { name, description, execute, schema },
+        name,
+        description,
+        jsonSchema,
+        execute,
     };
 }
 /**
- * Validate tool input against JSON schema
+ * Build a ToolDefinition-compatible object from a Tool.
+ * This can be passed to LLM APIs that expect tool definitions.
  */
-export function validateToolInput(input, schema) {
-    return Effect.try({
-        try: () => {
-            if (!schema) {
-                return input;
-            }
-            // Simple schema validation - in production, use ajv or similar
-            if (typeof schema === "object" && schema !== null) {
-                const s = schema;
-                if (s.type === "object" && typeof input !== "object" || input === null) {
-                    throw new Error(`Expected object, got ${typeof input}`);
-                }
-                if (s.type === "string" && typeof input !== "string") {
-                    throw new Error(`Expected string, got ${typeof input}`);
-                }
-                if (s.type === "number" && typeof input !== "number") {
-                    throw new Error(`Expected number, got ${typeof input}`);
-                }
-                if (s.type === "boolean" && typeof input !== "boolean") {
-                    throw new Error(`Expected boolean, got ${typeof input}`);
-                }
-            }
-            return input;
-        },
-        catch: (error) => new Error(`Tool input validation failed: ${error}`),
-    });
+export function toToolDefinition(tool) {
+    return {
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.jsonSchema,
+    };
 }
+// --- ToolResult formatting ---
 /**
- * Tool execution service - executes tools with proper error handling
+ * Format a tool execution result into ToolResultValue.
  */
+export function formatToolResult(result) {
+    if (result === null || result === undefined) {
+        return { type: "text", value: "" };
+    }
+    if (typeof result === "string") {
+        return { type: "text", value: result };
+    }
+    if (typeof result === "object") {
+        // Check if it has a .text and .attachments pattern (like opencode tool output)
+        const obj = result;
+        if (obj.output && typeof obj.output === "string") {
+            return { type: "text", value: obj.output };
+        }
+        // Otherwise serialize as JSON
+        return { type: "json", value: result };
+    }
+    return { type: "json", value: result };
+}
+// --- ToolExecutor Service ---
 export class ToolExecutor extends Context.Service()("opencode-harness/ToolExecutor") {
 }
-/**
- * Tool executor implementation
- */
-export const makeToolExecutor = Layer.succeed(ToolExecutor, {
-    execute: (tool, input) => Effect.gen(function* () {
-        yield* Effect.logInfo(`[ToolExecutor] Executing tool: ${tool.schema.name}`);
-        // Validate input if schema is provided
-        if (tool.schema.schema) {
-            yield* Effect.logInfo(`[ToolExecutor] Validating input against schema`);
-            yield* validateToolInput(input, tool.schema.schema);
-        }
-        const result = yield* Effect.tapError(tool.schema.execute(input), (error) => Effect.logError(`[ToolExecutor] Tool ${tool.schema.name} failed: ${error.message}`));
-        yield* Effect.logInfo(`[ToolExecutor] Tool ${tool.schema.name} completed`);
-        return result;
-    }),
-    executeWithRetry: (tool, input, maxRetries = 3, delayMs = 1000) => Effect.gen(function* () {
-        yield* Effect.logInfo(`[ToolExecutor] Executing tool with retry: ${tool.schema.name} (maxRetries=${maxRetries})`);
-        return yield* Effect.retry(Effect.gen(function* () {
-            // Validate input if schema is provided
-            if (tool.schema.schema) {
-                yield* validateToolInput(input, tool.schema.schema);
+export const makeToolExecutor = Layer.effect(ToolExecutor, Effect.gen(function* () {
+    const execute = (tool, input, context) => {
+        return Effect.gen(function* () {
+            yield* Effect.logInfo(`[ToolExecutor] Executing: ${tool.name}`);
+            // Execute
+            if (!tool.execute) {
+                return { type: "text", value: `Tool ${tool.name} has no execute handler` };
             }
-            const result = yield* tool.schema.execute(input);
-            yield* Effect.logInfo(`[ToolExecutor] Tool ${tool.schema.name} succeeded`);
-            return result;
-        }), { times: maxRetries, delay: { fixed: delayMs } });
-    }),
-    executeTools: (tools) => Effect.gen(function* () {
-        yield* Effect.logInfo(`[ToolExecutor] Executing ${tools.length} tools in parallel`);
-        const results = yield* Effect.forEach(tools, ({ tool, input }) => Effect.gen(function* () {
-            yield* Effect.logInfo(`[ToolExecutor] Executing tool: ${tool.schema.name}`);
-            // Validate input if schema is provided
-            if (tool.schema.schema) {
-                yield* Effect.logInfo(`[ToolExecutor] Validating input against schema`);
-                yield* validateToolInput(input, tool.schema.schema);
-            }
-            const result = yield* Effect.tapError(tool.schema.execute(input), (error) => Effect.logError(`[ToolExecutor] Tool ${tool.schema.name} failed: ${error.message}`));
-            yield* Effect.logInfo(`[ToolExecutor] Tool ${tool.schema.name} completed`);
-            return {
-                tool: tool.schema.name,
-                success: true,
-                result,
-            };
-        }).pipe(Effect.catch((error) => Effect.succeed({
-            tool: tool.schema.name,
-            success: false,
-            error,
-        }))), { concurrency: "unbounded" });
-        yield* Effect.logInfo(`[ToolExecutor] All ${tools.length} tools completed`);
-        return results;
-    }),
-});
-/**
- * Layer for ToolExecutor
- */
+            const result = yield* Effect.tapError(tool.execute(input, context), (error) => Effect.logError(`[ToolExecutor] ${tool.name} failed: ${error instanceof ToolFailure ? error.message : String(error)}`));
+            // Format result
+            const formatted = formatToolResult(result);
+            yield* Effect.logInfo(`[ToolExecutor] ${tool.name} completed`);
+            return formatted;
+        });
+    };
+    const executeTools = (tools) => {
+        return Effect.forEach(tools, ({ tool, input, context }) => execute(tool, input, context).pipe(Effect.map((result) => ({ name: tool.name, success: true, result })), Effect.catch((error) => {
+            const toolFailure = error instanceof ToolFailure ? error : new ToolFailure({ message: String(error) });
+            return Effect.succeed({ name: tool.name, success: false, error: toolFailure });
+        })), { concurrency: "unbounded" });
+    };
+    return ToolExecutor.of({ execute, executeTools });
+}));
 export const ToolExecutorLayer = makeToolExecutor;
-/**
- * Tool cache for caching tool execution results
- */
-export class ToolCache extends Context.Service()("opencode-harness/ToolCache") {
-}
-/**
- * In-memory tool cache implementation
- */
-export const makeToolCache = Layer.succeed(ToolCache, {
-    get: (key) => Effect.sync(() => {
-        const cached = cache.get(key);
-        return cached;
-    }),
-    set: (key, value) => Effect.sync(() => {
-        cache.set(key, value);
-    }),
-    clear: () => Effect.sync(() => {
-        cache.clear();
-    })
-});
-// In-memory cache storage
-const cache = new Map();
-/**
- * Layer for ToolCache
- */
-export const ToolCacheLayer = makeToolCache;
-/**
- * Combined layer for tool execution with caching
- */
-export const ToolLayer = Layer.provide(ToolCacheLayer)(ToolExecutorLayer);
 //# sourceMappingURL=tool.js.map

@@ -1,259 +1,333 @@
 /**
  * LLMClient - Effect-based client for LLM API calls
- * 
- * This is a simplified version of opencode's LLMClient.
- * It provides a clean API for making LLM requests using Effect.
+ *
+ * Provides:
+ * - stream(): Stream<LLMEvent> from any OpenAI-compatible endpoint
+ * - generate(): Non-streaming LLM call
+ * - generateObject(): JSON-structured output
  */
 
-import * as Effect from "effect/Effect";
-import * as Context from "effect/Context";
-import * as Layer from "effect/Layer";
-import type { LLMConfig as Config } from "./config.js";
-import { Cache, CacheLayer } from "./cache.js";
-import { generateStream } from "./streaming.js";
-import { Tool, ToolExecutor, ToolExecutorLayer } from "./tool.js";
+import * as Effect from "effect/Effect"
+import * as Context from "effect/Context"
+import * as Layer from "effect/Layer"
+import * as Stream from "effect/Stream"
+import { CacheLayer } from "./cache.js"
+import {
+  LLMRequest as _LLMRequest,
+  LLMResponse as _LLMResponse,
+  LLMEvent,
+  LLMError,
+  Model as _Model,
+  ToolDefinition as _ToolDefinition,
+  ToolChoice as _ToolChoice,
+  GenerationOptions as _GenerationOptions,
+  SystemPart as _SystemPart,
+  ContentPart as _ContentPart,
+  Message as _Message,
+  Usage as _Usage,
+  ResponseFormat as _ResponseFormat,
+ } from "./schema/index.js"
+import * as Schema from "effect/Schema"
 
-/**
- * Configuration for the LLM client.
- */
+type LLMRequest = Schema.Schema.Type<typeof _LLMRequest>
+type LLMResponse = Schema.Schema.Type<typeof _LLMResponse>
+type Model = Schema.Schema.Type<typeof _Model>
+type ToolDefinition = Schema.Schema.Type<typeof _ToolDefinition>
+type ToolChoice = Schema.Schema.Type<typeof _ToolChoice>
+type GenerationOptions = Schema.Schema.Type<typeof _GenerationOptions>
+type SystemPart = Schema.Schema.Type<typeof _SystemPart>
+type ContentPart = Schema.Schema.Type<typeof _ContentPart>
+type Message = Schema.Schema.Type<typeof _Message>
+type Usage = Schema.Schema.Type<typeof _Usage>
+
+import { buildOpenAIChatBody, buildOpenAIChatURL, buildOpenAIChatHeaders } from "./protocols/openai-chat.js"
+import { streamFromURL } from "./protocols/sse-parser.js"
+
+// --- Configuration ---
+
 export interface LLMConfig {
-  readonly baseUrl: string;
-  readonly model: string;
-  readonly apiKey?: string;
-  readonly maxTokens?: number;
-  readonly temperature?: number;
+  readonly baseUrl: string
+  readonly model: string
+  readonly apiKey?: string
+  readonly maxTokens?: number
+  readonly temperature?: number
+  readonly topP?: number
+  readonly topK?: number
+  readonly maxRetries?: number
 }
 
-/**
- * Generate a cache key for LLM requests
- */
-function generateCacheKey(config: Config, messages: Array<{ role: string; content: string }>): string {
-  const keyData = {
-    baseUrl: config.baseUrl,
-    model: config.model,
-    maxTokens: config.maxTokens,
-    temperature: config.temperature,
-    messages: messages.map(m => ({ role: m.role, content: m.content })),
-  };
-  return `llm:${JSON.stringify(keyData)}`;
-}
+// --- LLMClient Service ---
 
-/**
- * Service for the LLM client.
- */
 export class LLMClient extends Context.Service<LLMClient, LLMClientShape>()("opencode-harness/LLMClient") {}
 
-/**
- * Shape of the LLM client service.
- */
 export interface LLMClientShape {
-  readonly generate: (
-    config: Config,
-    messages: Array<{ role: string; content: string }>,
-  ) => Effect.Effect<string, Error>;
-  
-  readonly generateObject: <T>(
-    config: Config,
-    messages: Array<{ role: string; content: string }>,
-    schema: unknown,
-  ) => Effect.Effect<T, Error>;
+  readonly stream: (request: LLMRequest) => Stream.Stream<LLMEvent, LLMError>
+  readonly generate: (request: LLMRequest) => Effect.Effect<LLMResponse, LLMError>
+  readonly generateObject: <T>(request: LLMRequest) => Effect.Effect<T, LLMError>
+}
 
-  readonly generateStream: (
-    config: Config,
-    messages: Array<{ role: string; content: string }>,
-  ) => Effect.Effect<AsyncGenerator<string, void, unknown>, Error>;
+// --- Helpers ---
 
-  readonly executeTool: <T>(
-    tool: Tool<T>,
-    input: T,
-  ) => Effect.Effect<unknown, Error>;
+/**
+ * Build an LLMRequest from simple config + messages.
+ */
+export function simpleRequest(
+  config: LLMConfig,
+  messages: Array<{ role: string; content: string }>,
+  options?: {
+    system?: string | string[]
+    tools?: Array<{ name: string; description: string; parameters: Record<string, unknown> }>
+    toolChoice?: ToolChoice
+    responseFormat?: "text" | "json"
+    generation?: Partial<GenerationOptions>
+  },
+): LLMRequest {
+  const model: Model = {
+    id: config.model,
+    providerID: "openai-compatible",
+    api: {
+      id: config.model,
+      npm: "@ai-sdk/openai-compatible",
+    },
+  }
 
-  readonly executeTools: <T>(
-    tools: Array<{ tool: Tool<T>; input: T }>,
-  ) => Effect.Effect<Array<{ tool: string; success: boolean; result?: unknown; error?: Error }>, Error>;
+  const system: SystemPart[] = []
+  if (options?.system) {
+    const parts = Array.isArray(options.system) ? options.system : [options.system]
+    for (const text of parts) {
+      system.push({ type: "text", text })
+    }
+  }
+
+  const msgs: Message[] = messages.map((m) =>
+    _Message.make({
+      role: m.role as "system" | "user" | "assistant" | "tool",
+      content: m.content,
+    }),
+  )
+
+  const genOpts = options?.generation
+    ? new _GenerationOptions({
+        maxOutputTokens: config.maxTokens,
+        temperature: config.temperature,
+        topP: config.topP,
+        topK: config.topK,
+        ...options.generation,
+      })
+    : undefined
+
+  const respFormat = options?.responseFormat
+    ? options.responseFormat === "json"
+      ? _ResponseFormat.make({ type: "json", schema: {} })
+      : _ResponseFormat.make({ type: "text" })
+    : undefined
+
+  return new _LLMRequest({
+    model,
+    system,
+    messages: msgs,
+    tools: (options?.tools ?? []).map(
+      (t) =>
+        _ToolDefinition.make({
+          name: t.name,
+          description: t.description,
+          inputSchema: t.parameters,
+        }) as unknown as ToolDefinition,
+    ),
+    toolChoice: options?.toolChoice,
+    generation: genOpts,
+    responseFormat: respFormat,
+  })
 }
 
 /**
- * Create the LLM client implementation.
- * Returns a Layer that provides the LLMClient service.
+ * Build LLMResponse from collected events.
  */
-export const makeLLMClient = Layer.succeed(
-  LLMClient,
-  {
-    generate: (config: Config, messages: Array<{ role: string; content: string }>) =>
-      Effect.gen(function* () {
-        const cacheKey = generateCacheKey(config, messages);
-        
-        // Try cache first (cache is provided by CacheLayer in LLMClientLayer)
-        const cached = yield* Effect.provide(CacheLayer)(Cache).pipe(
-          Effect.flatMap((cache) => cache.get<string>(cacheKey))
-        );
-        if (cached !== undefined) {
-          yield* Effect.logInfo(`[LLMClient] Cache hit for key: ${cacheKey}`);
-          return cached;
-        }
-        
-        yield* Effect.logInfo(`[LLMClient] Cache miss for key: ${cacheKey}`);
-        
-        const requestBody = {
-          model: config.model,
-          messages: messages,
-          max_tokens: config.maxTokens,
-          temperature: config.temperature,
-        };
+function eventsToResponse(events: LLMEvent[], usage: Usage | undefined): LLMResponse {
+  const contentParts: ContentPart[] = []
+  let finish: string | undefined = undefined
 
-        const headers: Record<string, string> = {
-          "Content-Type": "application/json",
-        };
-        if (config.apiKey) {
-          headers["Authorization"] = `Bearer ${config.apiKey}`;
-        }
-
-        const response = yield* Effect.tryPromise({
-          try: async () => {
-            const res = await fetch(`${config.baseUrl}/chat/completions`, {
-              method: "POST",
-              headers: headers,
-              body: JSON.stringify(requestBody),
-            });
-
-            if (!res.ok) {
-              const bodyText = await res.text();
-              throw new Error(`LLM request failed: ${res.status} ${bodyText}`);
-            }
-
-            return res.json();
-          },
-          catch: (error) => new Error(`HTTP error: ${error}`),
-        });
-
-        const message = response.choices?.[0]?.message?.content;
-        if (!message) {
-          return yield* Effect.fail(new Error("No response from LLM"));
-        }
-
-        // Strip markdown code block wrapper if present
-        let jsonStr = message.trim();
-        if (jsonStr.startsWith("```json")) {
-          jsonStr = jsonStr.slice(7);
-        }
-        if (jsonStr.startsWith("```")) {
-          jsonStr = jsonStr.slice(3);
-        }
-        if (jsonStr.endsWith("```")) {
-          jsonStr = jsonStr.slice(0, -3);
-        }
-        jsonStr = jsonStr.trim();
-
-        // Store in cache
-        yield* Effect.provide(CacheLayer)(Cache).pipe(
-          Effect.flatMap((cache) => cache.set(cacheKey, jsonStr))
-        );
-        
-        return jsonStr;
-      }),
-    
-    generateObject: <T>(config: Config, messages: Array<{ role: string; content: string }>, _schema: unknown) =>
-      Effect.gen(function* () {
-        const cacheKey = generateCacheKey(config, messages);
-        
-        // Try cache first (cache is provided by CacheLayer in LLMClientLayer)
-        const cached = yield* Effect.provide(CacheLayer)(Cache).pipe(
-          Effect.flatMap((cache) => cache.get<string>(cacheKey))
-        );
-        if (cached !== undefined) {
-          yield* Effect.logInfo(`[LLMClient] Cache hit for key: ${cacheKey}`);
-          try {
-            return JSON.parse(cached) as T;
-          } catch (error) {
-            yield* Effect.logError(`[LLMClient] Failed to parse cached response: ${error}`);
-            // Fall through to call LLM
-          }
-        }
-        
-        yield* Effect.logInfo(`[LLMClient] Cache miss for key: ${cacheKey}`);
-        
-        const requestBody = {
-          model: config.model,
-          messages: messages,
-          response_format: { type: "json_object" },
-          max_tokens: config.maxTokens,
-          temperature: config.temperature,
-        };
-
-        const headers: Record<string, string> = {
-          "Content-Type": "application/json",
-        };
-        if (config.apiKey) {
-          headers["Authorization"] = `Bearer ${config.apiKey}`;
-        }
-
-        const response = yield* Effect.tryPromise({
-          try: async () => {
-            const res = await fetch(`${config.baseUrl}/chat/completions`, {
-              method: "POST",
-              headers: headers,
-              body: JSON.stringify(requestBody),
-            });
-
-            if (!res.ok) {
-              const bodyText = await res.text();
-              throw new Error(`LLM request failed: ${res.status} ${bodyText}`);
-            }
-
-            return res.json();
-          },
-          catch: (error) => new Error(`HTTP error: ${error}`),
-        });
-
-        const message = response.choices?.[0]?.message?.content;
-        if (!message) {
-          return yield* Effect.fail(new Error("No response from LLM"));
-        }
-
-        // Strip markdown code block wrapper if present
-        let jsonStr = message.trim();
-        if (jsonStr.startsWith("```json")) {
-          jsonStr = jsonStr.slice(7);
-        }
-        if (jsonStr.startsWith("```")) {
-          jsonStr = jsonStr.slice(3);
-        }
-        if (jsonStr.endsWith("```")) {
-          jsonStr = jsonStr.slice(0, -3);
-        }
-        jsonStr = jsonStr.trim();
-
-        try {
-          const result = JSON.parse(jsonStr) as T;
-          // Store in cache
-          yield* Effect.provide(CacheLayer)(Cache).pipe(
-            Effect.flatMap((cache) => cache.set(cacheKey, jsonStr))
-          );
-          return result;
-        } catch (error) {
-          return yield* Effect.fail(new Error(`Failed to parse JSON: ${error}`));
-        }
-      }),
-
-    generateStream: (config: Config, messages: Array<{ role: string; content: string }>) =>
-      Effect.succeed(generateStream(config, messages)),
-
-    executeTool: <T>(tool: Tool<T>, input: T) =>
-      Effect.gen(function* () {
-        const toolExecutor = yield* ToolExecutor;
-        return yield* toolExecutor.execute(tool, input);
-      }).pipe(Effect.provide(ToolExecutorLayer)),
-
-    executeTools: <T>(tools: Array<{ tool: Tool<T>; input: T }>) =>
-      Effect.gen(function* () {
-        const toolExecutor = yield* ToolExecutor;
-        return yield* toolExecutor.executeTools(tools);
-      }).pipe(Effect.provide(ToolExecutorLayer)),
+  for (const event of events) {
+    if (event.type === "text-delta") {
+      let textPart = contentParts.find((p) => p.type === "text") as
+        | Extract<ContentPart, { type: "text" }>
+        | undefined
+      if (!textPart) {
+        textPart = { type: "text", text: "" }
+        contentParts.push(textPart)
+      }
+      // Need to mutate — use Object.assign workaround since Schema.Class makes fields readonly
+      ;(textPart as { text: string }).text += event.text
+    }
   }
-);
+
+  return new _LLMResponse({
+    content: contentParts,
+    finish: finish as Parameters<typeof _LLMResponse.make>[0]["finish"],
+    usage,
+  })
+}
+
+// --- Implementation ---
+
+export const makeLLMClient = Layer.effect(
+  LLMClient,
+  Effect.gen(function* () {
+    const stream = (request: LLMRequest): Stream.Stream<LLMEvent, LLMError> => {
+      const body = buildOpenAIChatBody(request)
+      const apiKey = (request.model.native?.apiKey as string | undefined) ?? request.model.providerID
+
+      // Use model.api.id for the actual API call
+      const finalBody = { ...body, model: request.model.api.id }
+
+      return streamFromURL(request.model.id, buildOpenAIChatHeaders(apiKey), finalBody, {
+        modelID: request.model.id,
+      })
+    }
+
+    const generate = (request: LLMRequest): Effect.Effect<LLMResponse, LLMError> => {
+      return stream(request).pipe(
+        Stream.runCollect,
+        Effect.map((collection) => {
+          const events = [...collection]
+          let usage: Usage | undefined
+          for (let i = events.length - 1; i >= 0; i--) {
+            const event = events[i]
+            if (event.type === "finish" && event.usage) {
+              usage = event.usage as unknown as Usage
+              break
+            }
+          }
+          return eventsToResponse(events, usage)
+        }),
+      )
+    }
+
+    const generateObject = <T>(request: LLMRequest): Effect.Effect<T, LLMError> => {
+      const jsonRequest = new _LLMRequest({
+        ...request,
+        responseFormat: _ResponseFormat.make({ type: "json", schema: {} }),
+      })
+
+      return stream(jsonRequest).pipe(
+        Stream.runCollect,
+        Effect.flatMap((collection) => {
+          const events = [...collection]
+          let text = ""
+          for (const event of events) {
+            if (event.type === "text-delta") {
+              text += event.text
+            }
+          }
+
+          let jsonStr = text.trim()
+          if (jsonStr.startsWith("```json")) jsonStr = jsonStr.slice(7)
+          if (jsonStr.startsWith("```")) jsonStr = jsonStr.slice(3)
+          if (jsonStr.endsWith("```")) jsonStr = jsonStr.slice(0, -3)
+          jsonStr = jsonStr.trim()
+
+          return Effect.try({
+            try: () => JSON.parse(jsonStr) as T,
+            catch: (error) =>
+              new Error(
+                `Failed to parse JSON response: ${error instanceof Error ? error.message : String(error)}`,
+              ) as unknown as LLMError,
+          })
+        }),
+      )
+    }
+
+    return LLMClient.of({ stream, generate, generateObject })
+  }),
+)
+
+export const LLMClientLayer = makeLLMClient.pipe(Layer.provide(CacheLayer))
+
+// --- Convenience: simpleStream ---
+
+export interface SimpleStreamInput {
+  messages: Array<{ role: string; content: string }>
+  config: LLMConfig
+  system?: string | string[]
+  tools?: Array<{ name: string; description: string; parameters: Record<string, unknown> }>
+}
 
 /**
- * Layer for LLMClient with ToolExecutor and Cache
+ * Stream from simple inputs without building LLMRequest.
  */
-export const LLMClientLayer = Layer.provide(ToolExecutorLayer)(Layer.provide(CacheLayer)(makeLLMClient));
+export function simpleStream(input: SimpleStreamInput): Stream.Stream<LLMEvent, Error> {
+  const request = simpleRequest(input.config, input.messages, {
+    system: input.system,
+    tools: input.tools,
+  })
+
+  const body = buildOpenAIChatBody(request)
+  const url = buildOpenAIChatURL(input.config.baseUrl)
+  const headers = buildOpenAIChatHeaders(input.config.apiKey)
+
+  const asyncGen = async function* (): AsyncGenerator<LLMEvent, void, unknown> {
+    const controller = new AbortController()
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      })
+
+      if (!response.ok) {
+        const text = await response.text()
+        throw new Error(`LLM request failed: ${response.status} ${text}`)
+      }
+
+      if (!response.body) {
+        throw new Error("Response body is null")
+      }
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ""
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+
+          const chunk = decoder.decode(value, { stream: true })
+          buffer += chunk
+
+          const lines = buffer.split("\n")
+          buffer = lines.pop() ?? ""
+
+          for (const line of lines) {
+            const trimmed = line.trim()
+            if (trimmed && trimmed.startsWith("data: ")) {
+              const data = trimmed.slice(6)
+              if (data === "[DONE]") continue
+
+              try {
+                const parsed = JSON.parse(data)
+                const choice = parsed.choice?.[0]
+                if (choice?.delta?.content) {
+                  yield {
+                    type: "text-delta",
+                    id: "text-0",
+                    text: choice.delta.content,
+                  }
+                }
+              } catch {
+                // Ignore parse errors
+              }
+            }
+          }
+        }
+      } finally {
+        reader.releaseLock()
+      }
+    } finally {
+      controller.abort()
+    }
+  }
+
+  return Stream.fromAsyncIterable(asyncGen(), (error) => error instanceof Error ? error : new Error(String(error)))
+}
