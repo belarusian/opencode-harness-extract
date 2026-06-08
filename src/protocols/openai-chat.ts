@@ -59,7 +59,7 @@ export interface OpenAIChatBody {
   top_p?: number
   max_tokens?: number
   stop?: string[]
-  stream: true
+  stream?: true
   presence_penalty?: number
   frequency_penalty?: number
   seed?: number
@@ -180,9 +180,9 @@ function toolChoiceToOpenAI(toolChoice: ToolChoice): string | { type: "function"
 }
 
 /**
- * Build an OpenAI chat/completions body from an LLMRequest.
+ * Internal builder shared by streaming and non-streaming paths.
  */
-export function buildOpenAIChatBody(request: LLMRequest): OpenAIChatBody {
+function buildChatBody(request: LLMRequest, stream: boolean): OpenAIChatBody {
   const messages = request.messages.map(messageToOpenAI)
 
   // Inject system messages at the front
@@ -204,7 +204,7 @@ export function buildOpenAIChatBody(request: LLMRequest): OpenAIChatBody {
   const body: OpenAIChatBody = {
     model: request.model.id,
     messages,
-    stream: true,
+    stream: stream ? true : undefined,
   }
 
   // Tools
@@ -250,6 +250,20 @@ export function buildOpenAIChatBody(request: LLMRequest): OpenAIChatBody {
   }
 
   return body
+}
+
+/**
+ * Build an OpenAI chat/completions body for streaming requests.
+ */
+export function buildOpenAIChatBody(request: LLMRequest): OpenAIChatBody {
+  return buildChatBody(request, true)
+}
+
+/**
+ * Build an OpenAI chat/completions body for non-streaming requests.
+ */
+export function buildOpenAIChatStreamBody(request: LLMRequest): OpenAIChatBody {
+  return buildChatBody(request, false)
 }
 
 /**

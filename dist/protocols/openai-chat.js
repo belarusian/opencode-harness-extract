@@ -100,9 +100,9 @@ function toolChoiceToOpenAI(toolChoice) {
     }
 }
 /**
- * Build an OpenAI chat/completions body from an LLMRequest.
+ * Internal builder shared by streaming and non-streaming paths.
  */
-export function buildOpenAIChatBody(request) {
+function buildChatBody(request, stream) {
     const messages = request.messages.map(messageToOpenAI);
     // Inject system messages at the front
     const systemParts = request.system;
@@ -123,7 +123,7 @@ export function buildOpenAIChatBody(request) {
     const body = {
         model: request.model.id,
         messages,
-        stream: true,
+        stream: stream ? true : undefined,
     };
     // Tools
     if (request.tools.length > 0) {
@@ -173,6 +173,18 @@ export function buildOpenAIChatBody(request) {
         }
     }
     return body;
+}
+/**
+ * Build an OpenAI chat/completions body for streaming requests.
+ */
+export function buildOpenAIChatBody(request) {
+    return buildChatBody(request, true);
+}
+/**
+ * Build an OpenAI chat/completions body for non-streaming requests.
+ */
+export function buildOpenAIChatStreamBody(request) {
+    return buildChatBody(request, false);
 }
 /**
  * Build the request URL for an OpenAI chat completion.

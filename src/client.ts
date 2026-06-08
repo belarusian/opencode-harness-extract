@@ -40,8 +40,9 @@ type ContentPart = Schema.Schema.Type<typeof _ContentPart>
 type Message = Schema.Schema.Type<typeof _Message>
 type Usage = Schema.Schema.Type<typeof _Usage>
 
-import { buildOpenAIChatBody, buildOpenAIChatURL, buildOpenAIChatHeaders } from "./protocols/openai-chat.js"
-import { streamFromURL } from "./protocols/sse-parser.js"
+import { buildOpenAIChatBody, buildOpenAIChatURL, buildOpenAIChatHeaders, buildOpenAIChatStreamBody } from "./protocols/openai-chat.js"
+import { streamFromBody } from "./protocols/sse-parser.js"
+import { isRecord } from "./utils/record.js"
 
 // --- Configuration ---
 
@@ -89,6 +90,7 @@ export function simpleRequest(
       id: config.model,
       npm: "@ai-sdk/openai-compatible",
     },
+    native: { baseUrl: config.baseUrl, apiKey: config.apiKey },
   }
 
   const system: SystemPart[] = []
@@ -175,30 +177,67 @@ export const makeLLMClient = Layer.effect(
   Effect.gen(function* () {
     const stream = (request: LLMRequest): Stream.Stream<LLMEvent, LLMError> => {
       const body = buildOpenAIChatBody(request)
-      const apiKey = (request.model.native?.apiKey as string | undefined) ?? request.model.providerID
+      const baseUrl = (request.model.native?.baseUrl as string | undefined) ?? "http://localhost:8080/v1"
+      const apiKey = (request.model.native?.apiKey as string | undefined)
 
       // Use model.api.id for the actual API call
       const finalBody = { ...body, model: request.model.api.id }
+      const url = buildOpenAIChatURL(baseUrl)
 
-      return streamFromURL(request.model.id, buildOpenAIChatHeaders(apiKey), finalBody, {
+      return streamFromBody(url, buildOpenAIChatHeaders(apiKey), finalBody, {
         modelID: request.model.id,
       })
     }
 
     const generate = (request: LLMRequest): Effect.Effect<LLMResponse, LLMError> => {
-      return stream(request).pipe(
-        Stream.runCollect,
-        Effect.map((collection) => {
-          const events = [...collection]
-          let usage: Usage | undefined
-          for (let i = events.length - 1; i >= 0; i--) {
-            const event = events[i]
-            if (event.type === "finish" && event.usage) {
-              usage = event.usage as unknown as Usage
-              break
-            }
+      const body = buildOpenAIChatStreamBody(request)
+      const baseUrl = (request.model.native?.baseUrl as string | undefined) ?? "http://localhost:8080/v1"
+      const apiKey = (request.model.native?.apiKey as string | undefined)
+      const finalBody = { ...body, model: request.model.api.id }
+      const url = buildOpenAIChatURL(baseUrl)
+      const headers = buildOpenAIChatHeaders(apiKey)
+
+      return Effect.tryPromise({
+        try: () => fetch(url, { method: "POST", headers, body: JSON.stringify(finalBody) }),
+        catch: (error) => ({
+          _tag: "APIError" as const,
+          message: `Fetch failed: ${error instanceof Error ? error.message : String(error)}`,
+          isRetryable: true,
+        } as unknown as LLMError),
+      }).pipe(
+        Effect.flatMap((response) =>
+          Effect.tryPromise({
+            try: () => response.json(),
+            catch: (error) => ({
+              _tag: "APIError" as const,
+              message: `Failed to parse response: ${error instanceof Error ? error.message : String(error)}`,
+              isRetryable: false,
+            } as unknown as LLMError),
+          }),
+        ),
+        Effect.flatMap((json: unknown) => {
+          if (!isRecord(json) || !Array.isArray((json as Record<string, unknown>).choices) || ((json as Record<string, unknown>).choices as Array<unknown>).length === 0) {
+            return Effect.succeed(eventsToResponse([], undefined))
           }
-          return eventsToResponse(events, usage)
+
+          const data = json as Record<string, unknown>
+          const choices = data.choices as Array<{ message?: Record<string, unknown>; finish_reason?: string }>
+          const choice = choices[0]
+          const message = choice.message as Record<string, unknown> | undefined
+
+          const contentParts: ContentPart[] = []
+          if (message?.content && typeof message.content === "string" && message.content.trim()) {
+            contentParts.push({ type: "text", text: message.content })
+          }
+
+          const usage = data.usage ? (data.usage as unknown as Usage) : undefined
+          const finish = choice.finish_reason ? String(choice.finish_reason) : undefined
+
+          return Effect.succeed(new _LLMResponse({
+            content: contentParts,
+            finish: finish as Parameters<typeof _LLMResponse.make>[0]["finish"],
+            usage,
+          }))
         }),
       )
     }
@@ -209,15 +248,61 @@ export const makeLLMClient = Layer.effect(
         responseFormat: _ResponseFormat.make({ type: "json", schema: {} }),
       })
 
-      return stream(jsonRequest).pipe(
-        Stream.runCollect,
-        Effect.flatMap((collection) => {
-          const events = [...collection]
+      const body = buildOpenAIChatStreamBody(jsonRequest)
+      const baseUrl = (jsonRequest.model.native?.baseUrl as string | undefined) ?? "http://localhost:8080/v1"
+      const apiKey = (jsonRequest.model.native?.apiKey as string | undefined)
+      const finalBody = { ...body, model: jsonRequest.model.api.id }
+      const url = buildOpenAIChatURL(baseUrl)
+      const headers = buildOpenAIChatHeaders(apiKey)
+
+      return Effect.tryPromise({
+        try: () => fetch(url, { method: "POST", headers, body: JSON.stringify(finalBody) }),
+        catch: (error) => ({
+          _tag: "APIError" as const,
+          message: `Fetch failed: ${error instanceof Error ? error.message : String(error)}`,
+          isRetryable: true,
+        } as unknown as LLMError),
+      }).pipe(
+        Effect.flatMap((response) => {
+          if (!response.ok) {
+            return Effect.tryPromise({
+              try: () => response.text(),
+              catch: (e) => ({
+                _tag: "APIError" as const,
+                message: `HTTP ${response.status}: ${e instanceof Error ? e.message : String(e)}`,
+                isRetryable: false,
+              } as unknown as LLMError),
+            }).pipe(Effect.flatMap((text) => Effect.fail({
+              _tag: "APIError" as const,
+              message: `LLM request failed: ${response.status} ${text}`,
+              isRetryable: false,
+            } as unknown as LLMError)))
+          }
+          return Effect.tryPromise({
+            try: () => response.json(),
+            catch: (error) => ({
+              _tag: "APIError" as const,
+              message: `Failed to parse response: ${error instanceof Error ? error.message : String(error)}`,
+              isRetryable: false,
+            } as unknown as LLMError),
+          })
+        }),
+        Effect.flatMap((json: unknown) => {
+          if (!isRecord(json) || !Array.isArray((json as Record<string, unknown>).choices) || ((json as Record<string, unknown>).choices as Array<unknown>).length === 0) {
+            return Effect.fail({
+              _tag: "APIError" as const,
+              message: "Empty response from LLM",
+              isRetryable: false,
+            } as unknown as LLMError)
+          }
+
+          const data = json as Record<string, unknown>
+          const choices = data.choices as Array<{ message?: Record<string, unknown> }>
+          const choice = choices[0]
+          const message = choice.message as Record<string, unknown> | undefined
           let text = ""
-          for (const event of events) {
-            if (event.type === "text-delta") {
-              text += event.text
-            }
+          if (message?.content && typeof message.content === "string") {
+            text = message.content
           }
 
           let jsonStr = text.trim()

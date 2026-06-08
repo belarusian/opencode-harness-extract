@@ -21,7 +21,7 @@ interface OpenAISSEChunk {
   object: string
   created: number
   model: string
-  choice: {
+  choices: {
     index: number
     delta: {
       role?: string
@@ -90,7 +90,7 @@ function initState(): ParseState {
  */
 function parseChunk(chunk: OpenAISSEChunk, state: ParseState): LLMEvent[] {
   const events: LLMEvent[] = []
-  const choice = chunk.choice?.[0]
+  const choice = chunk.choices?.[0]
   if (!choice) return events
 
   const delta = choice.delta
@@ -305,25 +305,23 @@ export function streamFromURL(
     // Emit step-start
     yield { type: "step-start", index: 0 } as LLMEvent
 
-    const processChunk = (chunk: OpenAISSEChunk) => {
-      const events = parseChunk(chunk, state)
-       for (const _event of events) {
-          // events emitted via yield
-        }
+    const processLine = async function* (line: string) {
+      const chunk = parseSSELine(line)
+      if (!chunk) return
 
-      const choice = chunk.choice?.[0]
+      const events = parseChunk(chunk, state)
+      for (const event of events) {
+        yield event
+      }
+
+ const choice = chunk.choices?.[0]
       if (choice?.finish_reason && choice.finish_reason !== "tool_calls") {
         const flushEvents = flushState(state)
-        for (const _event of flushEvents) {
-          // events emitted via yield
+        for (const event of flushEvents) {
+          yield event
         }
         emittedFinish = true
       }
-    }
-
-    const processLine = (line: string) => {
-      const chunk = parseSSELine(line)
-      if (chunk) processChunk(chunk)
     }
 
     try {
@@ -374,11 +372,19 @@ export function streamFromURL(
 
           for (const line of lines) {
             const trimmed = line.trim()
-            if (trimmed) processLine(trimmed)
+            if (trimmed) {
+              for await (const event of processLine(trimmed)) {
+                yield event
+              }
+            }
           }
         }
 
-        if (buffer.trim()) processLine(buffer.trim())
+        if (buffer.trim()) {
+          for await (const event of processLine(buffer.trim())) {
+            yield event
+          }
+        }
       } finally {
         reader.releaseLock()
       }
@@ -411,4 +417,17 @@ export function streamFromURL(
       isRetryable: true,
     } as unknown as LLMError
   })
+}
+
+/**
+ * Stream from a pre-built body object and headers (without URL construction).
+ * Useful when the caller already has the body and just needs the stream.
+ */
+export function streamFromBody(
+  url: string,
+  headers: Record<string, string>,
+  body: Record<string, unknown>,
+  options?: { modelID?: string },
+): Stream.Stream<LLMEvent, LLMError> {
+  return streamFromURL(url, headers, body, options)
 }

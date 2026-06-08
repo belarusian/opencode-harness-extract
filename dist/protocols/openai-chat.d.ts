@@ -46,7 +46,7 @@ export interface OpenAIChatBody {
     top_p?: number;
     max_tokens?: number;
     stop?: string[];
-    stream: true;
+    stream?: true;
     presence_penalty?: number;
     frequency_penalty?: number;
     seed?: number;
@@ -59,9 +59,13 @@ export interface OpenAIChatBody {
     [key: string]: unknown;
 }
 /**
- * Build an OpenAI chat/completions body from an LLMRequest.
+ * Build an OpenAI chat/completions body for streaming requests.
  */
 export declare function buildOpenAIChatBody(request: LLMRequest): OpenAIChatBody;
+/**
+ * Build an OpenAI chat/completions body for non-streaming requests.
+ */
+export declare function buildOpenAIChatStreamBody(request: LLMRequest): OpenAIChatBody;
 /**
  * Build the request URL for an OpenAI chat completion.
  */
