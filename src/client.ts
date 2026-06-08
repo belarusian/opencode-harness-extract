@@ -230,7 +230,22 @@ export const makeLLMClient = Layer.effect(
             contentParts.push({ type: "text", text: message.content })
           }
 
-          const usage = data.usage ? (data.usage as unknown as Usage) : undefined
+          let usage: Usage | undefined = undefined
+          if (data.usage && isRecord(data.usage)) {
+            const u = data.usage as Record<string, unknown>
+            usage = new _Usage({
+              inputTokens: u.prompt_tokens as number | undefined,
+              outputTokens: u.completion_tokens as number | undefined,
+              totalTokens: u.total_tokens as number | undefined,
+              reasoningTokens: u.completion_tokens_details && isRecord(u.completion_tokens_details)
+                ? (u.completion_tokens_details as Record<string, unknown>).reasoning_tokens as number | undefined
+                : undefined,
+              cacheReadInputTokens: u.prompt_tokens_details && isRecord(u.prompt_tokens_details)
+                ? (u.prompt_tokens_details as Record<string, unknown>).cached_tokens as number | undefined
+                : undefined,
+            })
+          }
+
           const finish = choice.finish_reason ? String(choice.finish_reason) : undefined
 
           return Effect.succeed(new _LLMResponse({

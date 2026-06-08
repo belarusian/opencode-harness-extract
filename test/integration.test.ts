@@ -93,6 +93,40 @@ describe("Integration: LLM Streaming", () => {
   }, 30000);
 });
 
+describe("Integration: Non-Streaming", () => {
+  if (!hasEndpoint) {
+    it.skip("skipped — set LLM_BASE_URL to enable", () => {})
+    return
+  }
+  const baseUrl = process.env.LLM_BASE_URL || "http://10.106.1.89:8080/v1";
+  const apiKey = process.env.LLM_API_KEY || "";
+  const model = process.env.LLM_MODEL || "gpt-oss";
+
+  const config = {
+    baseUrl,
+    model,
+    apiKey,
+    maxTokens: 128,
+    temperature: 0.1,
+  };
+
+  it("should generate text with generate", async () => {
+    const request = simpleRequest(config, [
+      { role: "user", content: "Say exactly: 'non-streaming works'" },
+    ]);
+
+    const program = Effect.gen(function* () {
+      const client = yield* Effect.provide(LLMClientLayer)(LLMClient);
+      return yield* client.generate(request);
+    });
+
+    const result = await Effect.runPromise(program);
+    expect(result.content.length).toBeGreaterThan(0);
+    const textContent = result.content.find((p) => p.type === "text") as Extract<typeof p, { type: "text" }> | undefined;
+    expect(textContent?.text.toLowerCase()).toContain("non-streaming works");
+  }, 30000);
+});
+
 describe("Integration: JSON Output", () => {
   if (!hasEndpoint) {
     it.skip("skipped — set LLM_BASE_URL to enable", () => {})

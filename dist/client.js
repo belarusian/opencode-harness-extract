@@ -11,7 +11,7 @@ import * as Context from "effect/Context";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import { CacheLayer } from "./cache.js";
-import { LLMRequest as _LLMRequest, LLMResponse as _LLMResponse, ToolDefinition as _ToolDefinition, GenerationOptions as _GenerationOptions, Message as _Message, ResponseFormat as _ResponseFormat, } from "./schema/index.js";
+import { LLMRequest as _LLMRequest, LLMResponse as _LLMResponse, ToolDefinition as _ToolDefinition, GenerationOptions as _GenerationOptions, Message as _Message, Usage as _Usage, ResponseFormat as _ResponseFormat, } from "./schema/index.js";
 import { buildOpenAIChatBody, buildOpenAIChatURL, buildOpenAIChatHeaders, buildOpenAIChatStreamBody } from "./protocols/openai-chat.js";
 import { streamFromBody } from "./protocols/sse-parser.js";
 import { isRecord } from "./utils/record.js";
@@ -141,7 +141,21 @@ export const makeLLMClient = Layer.effect(LLMClient, Effect.gen(function* () {
             if (message?.content && typeof message.content === "string" && message.content.trim()) {
                 contentParts.push({ type: "text", text: message.content });
             }
-            const usage = data.usage ? data.usage : undefined;
+            let usage = undefined;
+            if (data.usage && isRecord(data.usage)) {
+                const u = data.usage;
+                usage = new _Usage({
+                    inputTokens: u.prompt_tokens,
+                    outputTokens: u.completion_tokens,
+                    totalTokens: u.total_tokens,
+                    reasoningTokens: u.completion_tokens_details && isRecord(u.completion_tokens_details)
+                        ? u.completion_tokens_details.reasoning_tokens
+                        : undefined,
+                    cacheReadInputTokens: u.prompt_tokens_details && isRecord(u.prompt_tokens_details)
+                        ? u.prompt_tokens_details.cached_tokens
+                        : undefined,
+                });
+            }
             const finish = choice.finish_reason ? String(choice.finish_reason) : undefined;
             return Effect.succeed(new _LLMResponse({
                 content: contentParts,
