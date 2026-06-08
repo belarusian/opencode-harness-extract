@@ -258,7 +258,7 @@ function flushState(state: ParseState): LLMEvent[] {
   return events
 }
 
-function mapFinishReason(reason: string | null): Extract<LLMEvent, { type: "step-finish" }>["reason"] {
+export function mapFinishReason(reason: string | null): Extract<LLMEvent, { type: "step-finish" }>["reason"] {
   if (!reason) return "unknown"
   switch (reason) {
     case "stop":

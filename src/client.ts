@@ -41,7 +41,7 @@ type Message = Schema.Schema.Type<typeof _Message>
 type Usage = Schema.Schema.Type<typeof _Usage>
 
 import { buildOpenAIChatBody, buildOpenAIChatURL, buildOpenAIChatHeaders, buildOpenAIChatStreamBody } from "./protocols/openai-chat.js"
-import { streamFromBody } from "./protocols/sse-parser.js"
+import { streamFromBody, mapFinishReason } from "./protocols/sse-parser.js"
 import { isRecord } from "./utils/record.js"
 
 // --- Configuration ---
@@ -226,8 +226,36 @@ export const makeLLMClient = Layer.effect(
           const message = choice.message as Record<string, unknown> | undefined
 
           const contentParts: ContentPart[] = []
+
+          // Text content
           if (message?.content && typeof message.content === "string" && message.content.trim()) {
             contentParts.push({ type: "text", text: message.content })
+          }
+
+          // Tool calls
+          if (Array.isArray(message?.tool_calls)) {
+            const toolCalls = message.tool_calls as Array<{ id: string; type: string; function?: { name: string; arguments: string } }>
+            for (const tc of toolCalls) {
+              if (tc.type === "function" && tc.function) {
+                let input: unknown = {}
+                try {
+                  input = JSON.parse(tc.function.arguments)
+                } catch {
+                  input = tc.function.arguments
+                }
+                contentParts.push({
+                  type: "tool-call",
+                  id: tc.id,
+                  name: tc.function.name,
+                  input,
+                })
+              }
+            }
+          }
+
+          // Reasoning content
+          if (message?.reasoning && typeof message.reasoning === "string" && message.reasoning.trim()) {
+            contentParts.push({ type: "reasoning", text: message.reasoning })
           }
 
           let usage: Usage | undefined = undefined
@@ -246,7 +274,7 @@ export const makeLLMClient = Layer.effect(
             })
           }
 
-          const finish = choice.finish_reason ? String(choice.finish_reason) : undefined
+          const finish = choice.finish_reason ? mapFinishReason(choice.finish_reason) : undefined
 
           return Effect.succeed(new _LLMResponse({
             content: contentParts,
@@ -321,6 +349,13 @@ export const makeLLMClient = Layer.effect(
           }
 
           let jsonStr = text.trim()
+          if (!jsonStr) {
+            return Effect.fail({
+              _tag: "APIError" as const,
+              message: "Empty response from LLM — no content in choices[0].message",
+              isRetryable: false,
+            } as unknown as LLMError)
+          }
           if (jsonStr.startsWith("```json")) jsonStr = jsonStr.slice(7)
           if (jsonStr.startsWith("```")) jsonStr = jsonStr.slice(3)
           if (jsonStr.endsWith("```")) jsonStr = jsonStr.slice(0, -3)

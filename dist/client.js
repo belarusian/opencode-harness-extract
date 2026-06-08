@@ -13,7 +13,7 @@ import * as Stream from "effect/Stream";
 import { CacheLayer } from "./cache.js";
 import { LLMRequest as _LLMRequest, LLMResponse as _LLMResponse, ToolDefinition as _ToolDefinition, GenerationOptions as _GenerationOptions, Message as _Message, Usage as _Usage, ResponseFormat as _ResponseFormat, } from "./schema/index.js";
 import { buildOpenAIChatBody, buildOpenAIChatURL, buildOpenAIChatHeaders, buildOpenAIChatStreamBody } from "./protocols/openai-chat.js";
-import { streamFromBody } from "./protocols/sse-parser.js";
+import { streamFromBody, mapFinishReason } from "./protocols/sse-parser.js";
 import { isRecord } from "./utils/record.js";
 // --- LLMClient Service ---
 export class LLMClient extends Context.Service()("opencode-harness/LLMClient") {
@@ -138,8 +138,34 @@ export const makeLLMClient = Layer.effect(LLMClient, Effect.gen(function* () {
             const choice = choices[0];
             const message = choice.message;
             const contentParts = [];
+            // Text content
             if (message?.content && typeof message.content === "string" && message.content.trim()) {
                 contentParts.push({ type: "text", text: message.content });
+            }
+            // Tool calls
+            if (Array.isArray(message?.tool_calls)) {
+                const toolCalls = message.tool_calls;
+                for (const tc of toolCalls) {
+                    if (tc.type === "function" && tc.function) {
+                        let input = {};
+                        try {
+                            input = JSON.parse(tc.function.arguments);
+                        }
+                        catch {
+                            input = tc.function.arguments;
+                        }
+                        contentParts.push({
+                            type: "tool-call",
+                            id: tc.id,
+                            name: tc.function.name,
+                            input,
+                        });
+                    }
+                }
+            }
+            // Reasoning content
+            if (message?.reasoning && typeof message.reasoning === "string" && message.reasoning.trim()) {
+                contentParts.push({ type: "reasoning", text: message.reasoning });
             }
             let usage = undefined;
             if (data.usage && isRecord(data.usage)) {
@@ -156,7 +182,7 @@ export const makeLLMClient = Layer.effect(LLMClient, Effect.gen(function* () {
                         : undefined,
                 });
             }
-            const finish = choice.finish_reason ? String(choice.finish_reason) : undefined;
+            const finish = choice.finish_reason ? mapFinishReason(choice.finish_reason) : undefined;
             return Effect.succeed(new _LLMResponse({
                 content: contentParts,
                 finish: finish,
@@ -222,6 +248,13 @@ export const makeLLMClient = Layer.effect(LLMClient, Effect.gen(function* () {
                 text = message.content;
             }
             let jsonStr = text.trim();
+            if (!jsonStr) {
+                return Effect.fail({
+                    _tag: "APIError",
+                    message: "Empty response from LLM — no content in choices[0].message",
+                    isRetryable: false,
+                });
+            }
             if (jsonStr.startsWith("```json"))
                 jsonStr = jsonStr.slice(7);
             if (jsonStr.startsWith("```"))

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { LLMClient, LLMClientLayer, simpleRequest } from "../src/client.js";
+import { ToolChoice } from "../src/schema/index.js";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 
@@ -124,6 +125,26 @@ describe("Integration: Non-Streaming", () => {
     expect(result.content.length).toBeGreaterThan(0);
     const textContent = result.content.find((p) => p.type === "text") as Extract<typeof p, { type: "text" }> | undefined;
     expect(textContent?.text.toLowerCase()).toContain("non-streaming works");
+  }, 30000);
+
+  it("should handle tool calls in generate response", async () => {
+    const request = simpleRequest(config, [
+      { role: "user", content: "Call the echo tool with message 'hello'" },
+    ], {
+      tools: [
+        { name: "echo", description: "Echo a message", parameters: { type: "object", properties: { message: { type: "string" } }, required: ["message"] } },
+      ],
+      toolChoice: ToolChoice.make("required"),
+    });
+
+    const program = Effect.gen(function* () {
+      const client = yield* Effect.provide(LLMClientLayer)(LLMClient);
+      return yield* client.generate(request);
+    });
+
+    const result = await Effect.runPromise(program);
+    const toolCall = result.content.find((p) => p.type === "tool-call") as Extract<typeof p, { type: "tool-call" }> | undefined;
+    expect(toolCall?.name).toBe("echo");
   }, 30000);
 });
 
