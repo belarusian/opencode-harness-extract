@@ -1,288 +1,107 @@
 # AGENTS.md
 
-This document explains how to work in the opencode-harness-extract codebase - a local-first LLM harness extracted from opencode's infrastructure.
+This document explains how to work in the `@opencode-harness/llm` codebase — a standalone LLM client extracted from opencode's `packages/llm`.
 
-## Extraction History
+## What This Package Provides
 
-### How This Was Built
+A minimal LLM client for building agent loops with local-first inference:
 
-**Step 1: Understand the Dependencies**
-```bash
-cd /Users/av4nda/Code/opencode/packages/llm
-cat package.json
-cat ../../package.json | grep -A 50 '"catalog"'
-```
-
-**Step 2: Create the Package**
-- Initialized with `pnpm init`
-- Added dependencies: `effect@4.0.0-beta.70`, `@smithy/*`, `aws4fetch`
-- Created minimal `src/client.ts` with LLMClient using Effect v4
-
-**Step 3: Fix Breaking Changes**
-Effect v4 has breaking changes from v3:
-- `Context.Tag("Id")` → `Context.Service<Self, Shape>()("Id")`
-- `Layer.provide(layers)(effect)` → `Layer.succeed(service, resource)`
-- `Effect.provide(layer)(effect)` → `Effect.provide(layer)(effect)`
-
-**Step 4: Extract Features One by One**
-- First: Basic LLMClient (generate/generateObject)
-- Second: Tool execution with ToolExecutor
-- Third: Caching with Cache service
-- Fourth: Streaming support
-
-**Step 5: Test with Real LLM**
-- Used UnSloth endpoint at `http://10.106.1.89:8080/v1`
-- Verified JSON mode, free text, tool execution all work
-
-### Why Extract?
-Opencode's `packages/llm` is powerful but tightly coupled to the monorepo:
-- Uses `catalog:` protocol for dependencies (pnpm workspace only)
-- Has `workspace:*` references to internal packages
-- Complex Layer-based architecture
-
-This extract makes opencode's LLM infrastructure available as a standalone package while:
-1. Using only standard npm packages (no catalog protocol)
-2. Removing all opencode monorepo dependencies
-3. Fixing Effect v4 breaking changes (Context.Tag → Context.Service)
-4. Keeping only features we actually need
-
-### What Was Extracted (v1 - Current)
-- ✅ LLMClient with HTTP calls to OpenAI-compatible APIs
-- ✅ Tool execution runtime with logging
-- ✅ SSE streaming support
-- ✅ In-memory caching layer
-- ✅ Clean Effect v4 patterns
-
-### What Was Left Behind (For Now)
-- Provider-specific clients (OpenAI, Anthropic, Google, etc.) - Not needed, we use OpenAI-compatible API
-- Protocol implementations (Anthropic Messages, Bedrock Converse, Gemini) - Not needed
-
-### Files from opencode to Compare
-- `/Users/av4nda/Code/opencode/packages/llm/src/` - Original source
-- `/Users/av4nda/Code/opencode/packages/llm/package.json` - Original dependencies
-
-## Project Overview
-
-**opencode-harness-extract** is a standalone LLM client library that provides:
-
-1. **LLMClient** - Effect-based client for OpenAI-compatible APIs
-2. **Tool execution** - Run tools with proper error handling
-3. **Streaming** - Support for SSE streaming responses
-4. **Caching** - Request/response caching
-
-### Key Design Principles
-
-1. **Zero External LLM Dependencies** - We don't use `@opencode-ai/llm` or any workspace-specific packages. Instead, we use direct `fetch` HTTP calls to the LLM API endpoint.
-
-2. **Effect for Control Flow** - We use `Effect.gen` for structured error handling, logging, and composition.
-
-3. **Local-First** - Works with llama.cpp, ollama, vllm, or any OpenAI-compatible endpoint. No provider-specific clients needed.
-
-4. **Service Pattern with Context** - Uses `Context.Service` and `Context.Tag` for dependency injection (Effect v4 pattern).
+1. **LLMEvent** — Unified event contract (`text-delta`, `tool-call`, `step-finish`, etc.)
+2. **LLMClient** — `stream()`, `generate()`, `generateObject()` services
+3. **Tool system** — `ToolExecutor`, `ToolFailure`, `ToolExecuteContext`
+4. **OpenAI Chat protocol** — `buildOpenAIChatBody()` for `chat/completions` JSON
+5. **SSE stream parser** — `streamFromURL()` producing `Stream<LLMEvent>`
+6. **Schema layer** — `LLMRequest`, `LLMResponse`, `Message`, `ToolDefinition`, `Model`, `Usage`, errors
+7. **Caching** — In-memory `Cache` service
 
 ## Architecture
 
 ```
 src/
-├── index.ts       - Main exports
-├── client.ts      - LLMClient class with HTTP calls
-├── tool.ts        - Tool execution utilities
-├── cache.ts       - Caching layer
-├── streaming.ts   - Streaming support
-└── config.ts      - Configuration types
+├── index.ts              - Main exports
+├── client.ts             - LLMClient service (stream, generate, generateObject)
+├── tool.ts               - ToolExecutor, ToolFailure, makeDynamicTool
+├── cache.ts              - Cache service
+├── schema/               - Type definitions
+│   ├── ids.ts            - ProviderID, ToolCallID, FinishReason, etc.
+│   ├── messages.ts       - Message, ToolDefinition, ToolChoice, LLMRequest, Model
+│   ├── events.ts         - LLMEvent union (text, tool, reasoning, step events)
+│   ├── events-usage.ts   - Usage class with token tracking
+│   ├── errors.ts         - LLMError, APIError, AbortError, etc.
+│   ├── options.ts        - GenerationOptions, HttpOptions, CachePolicy
+│   └── index.ts          - Re-exports all schema types
+├── protocols/            - Protocol implementations
+│   ├── openai-chat.ts    - buildOpenAIChatBody, buildOpenAIChatURL
+│   └── sse-parser.ts     - streamFromURL: SSE → Stream<LLMEvent>
+└── utils/
+    └── record.ts         - isRecord helper
 ```
 
-### Effect Patterns Used
+### Effect v4 Patterns Used
 
-#### 1. Effect.gen for Structured Concurrency
+**Service pattern** (v4 uses `Context.Service`, not `Context.Tag`):
 ```typescript
-return Effect.gen(function* () {
-  const result = yield* someEffect;
-  return result;
-});
+export class LLMClient extends Context.Service<LLMClient, LLMClientShape>()("opencode-harness/LLMClient") {}
 ```
 
-#### 2. Type-Safe Errors
+**Class declarations** (v4 requires `class X extends Schema.Class<X>("Id")({...}) {}`):
 ```typescript
-generate(text: string): Effect.Effect<string, Error> {
-  // Returns Effect<SuccessType, ErrorType, Requirements>
-}
+export class LLMRequest extends Schema.Class<LLMRequest>("LLM.Request")({
+  model: Model,
+  messages: Schema.Array(Message),
+  // ...
+}) {}
 ```
 
-#### 3. Promise Interop
+**Stream.fromAsyncIterable** (v4 doesn't have `Stream.async`):
 ```typescript
-const response = yield* Effect.tryPromise({
-  try: async () => {
-    const res = await fetch(url, { method: "POST", body: JSON.stringify(body) });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json();
-  },
-  catch: (error) => new Error(`Request failed: ${error}`),
-});
+return Stream.fromAsyncIterable(asyncGen(), (error) => new Error(String(error)))
 ```
 
-#### 4. Async Generator for Streaming
+**Layer.provide** (provide layers to services):
 ```typescript
-async function* generateStream(config, messages) {
-  const response = await fetch(url, { ... });
-  const reader = response.body.getReader();
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    const chunk = decoder.decode(value);
-    yield parseChunk(chunk);
-  }
-}
-```
-
-#### 5. Layer Pattern for Services
-```typescript
-export const LLMClientLayer = Layer.succeed(LLMClient, {
-  generate: (config, messages) => Effect.gen(function* () { /* ... */ }),
-  generateObject: (config, messages, schema) => Effect.gen(function* () { /* ... */ }),
-});
+export const LLMClientLayer = makeLLMClient.pipe(Layer.provide(CacheLayer))
 ```
 
 ## Development Workflow
 
-### Setup
 ```bash
 pnpm install
-pnpm build
-pnpm start
+pnpm build      # TypeScript compilation
+pnpm test       # 18 unit tests
 ```
 
-### Environment Variables
-- `LLM_BASE_URL` - LLM API endpoint (default: `http://localhost:8080/v1`)
-- `LLM_MODEL` - Model name (default: `llama-cpp/qwen3-coder-next-q8`)
-- `LLM_API_KEY` - API key for authentication (optional)
-- `LLM_MAX_TOKENS` - Maximum tokens (default: `1000`)
-- `LLM_TEMPERATURE` - Temperature (default: `0.1`)
+### Environment Variables (for integration tests)
 
-### Running
-```bash
-# Basic usage
-pnpm start
+- `LLM_BASE_URL` — LLM endpoint (default: `http://10.106.1.89:8080/v1`)
+- `LLM_API_KEY` — API key (optional for local models)
 
-# With custom endpoint
-LLM_BASE_URL=http://localhost:11434/v1 pnpm start
-```
+## Adding Features
 
-## Implementation Guide
+### To add a new LLMEvent type:
+1. Add schema in `src/schema/events.ts`
+2. Add to the `llmEventTagged` union
+3. Update SSE parser in `src/protocols/sse-parser.ts` to emit the event
 
-### To add a new HTTP endpoint:
-1. Add method to `LLMClientShape` interface in `client.ts`
-2. Implement the method in `makeLLMClient`
-3. Add error handling in `Effect.tryPromise`
-4. Update type signatures as needed
+### To add a new protocol:
+1. Create `src/protocols/<name>.ts` with body builder and stream parser
+2. Export from `src/protocols/index.ts`
+3. Add to `LLMClient` if needed
 
-### To add tool execution:
-1. Define tool schema in `tool.ts`
-2. Implement `executeTool` in `LLMClient`
-3. Add result parsing and error handling
-
-### To add streaming:
-1. Implement `generateStream` using async generator
-2. Parse SSE response chunks
-3. Handle stream errors gracefully
-
-### To add caching:
-1. Create cache service in `cache.ts`
-2. Implement `get`/`set` methods
-3. Integrate with LLMClient methods
-
-## What to Implement Next
-
-### Lower Priority
-- Provider abstraction (optional - OpenAI-compatible is enough)
-- Protocol implementations (Anthropic, Bedrock, etc.)
-- Advanced caching policies (TTL, eviction)
-
-## Remaining from opencode/llm (Not Needed for Local-First)
-
-| Feature | opencode/llm | This Package |
-|---------|--------------|--------------|
-| `prepare()` method | ✅ Full request compilation | Not implemented (not needed) |
-| `LLMEvent` streaming | ✅ Full event stream | ✅ Content-only streaming |
-| Provider routes | ✅ OpenAI, Anthropic, Bedrock | Not implemented (not needed) |
-| Tool step count tracking | ✅ `stepCountIs` | Not implemented (not needed) |
-| GenerateObjectResponse wrapper | ✅ With usage/metadata | ✅ Raw JSON return |
-
-## Status
-
-| Feature | Status |
-|---------|--------|
-| LLMClient (generate/generateObject) | ✅ Done |
-| Tool execution runtime | ✅ Done |
-| Tool schema validation | ✅ Done |
-| Tool execution retry | ✅ Done |
-| Parallel tool execution | ✅ Done |
-| SSE streaming support | ✅ Done |
-| Caching layer | ✅ Done |
+### To add a new tool:
+1. Use `makeDynamicTool(name, description, jsonSchema, execute)` in consuming code
+2. Execute via `ToolExecutor.execute(tool, input, context)`
 
 ## Testing
 
-### Unit Tests
-
-Run all unit tests:
-
 ```bash
-pnpm test
-```
-
-Run specific test file:
-
-```bash
-pnpm test test/client.test.ts
-pnpm test test/tool.test.ts
-pnpm test test/cache.test.ts
-```
-
-### Integration Tests
-
-**Note:** Integration tests require a running LLM endpoint (like llama.cpp or ollama).
-
-Run the end-to-end integration test:
-
-```bash
-export LLM_BASE_URL="http://localhost:8080/v1"
-export LLM_API_KEY=""
-npx tsx test_integration.ts
-```
-
-This tests all features with a real LLM:
-- `generate()` - Text generation with caching
-- `generateObject()` - JSON generation
-- `generateStream()` - SSE streaming
-- `executeTool()` - Single tool execution
-- `executeTools()` - Parallel tool execution
-
-**For CI/CD:** Unit tests only (no real LLM required)
-
-Tests are located in `test/`:
-- `cache.test.ts` - Cache operations
-- `tool.test.ts` - Tool execution with retry and validation
-- `client.test.ts` - LLMClient integration tests
-- `test_integration.ts` - End-to-end integration with real LLM
-
-## Debugging
-
-```bash
-# Check types
-pnpm run typecheck
-
-# Build
-pnpm run build
-
-# Test with local LLM
-export LLM_BASE_URL="http://localhost:8080/v1"
-export LLM_API_KEY=""
-pnpm start
+pnpm test                    # All unit tests (18 passing)
+pnpm test test/tool.test.ts  # Tool execution tests
+pnpm test test/client.test.ts # Client request building tests
 ```
 
 ## References
 
-- Effect documentation: https://effect.website/docs
+- Effect v4 docs: https://effect.website/docs
 - OpenAI API: https://platform.openai.com/docs/api-reference/chat
-- llama.cpp: https://github.com/ggerganov/llama.cpp
-- ollama: https://ollama.com/
+- Source extracted from: `/Users/av4nda/Code/opencode/packages/llm/`
