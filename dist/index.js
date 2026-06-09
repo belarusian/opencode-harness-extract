@@ -28,6 +28,8 @@ export { LLMClient, LLMClientLayer, simpleRequest, simpleStream, makeLLMClient }
 export { Cache, CacheLayer, makeCache } from "./cache.js";
 // Tools
 export { ToolExecutor, ToolExecutorLayer, makeToolExecutor, makeDynamicTool, toToolDefinition, formatToolResult, ToolFailure, } from "./tool.js";
+// Agent loop
+export { AgentLoop, AgentLoopLayer, makeAgentLoop, runAgent, } from "./agent.js";
 // Protocol helpers
 export { buildOpenAIChatBody, buildOpenAIChatURL, buildOpenAIChatHeaders } from "./protocols/openai-chat.js";
 export { streamFromURL } from "./protocols/sse-parser.js";

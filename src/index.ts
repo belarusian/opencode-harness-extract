@@ -103,6 +103,23 @@ export type {
   ToolFailure as ToolFailureType,
 } from "./tool.js"
 
+// Agent loop
+export {
+  AgentLoop,
+  AgentLoopLayer,
+  makeAgentLoop,
+  runAgent,
+} from "./agent.js"
+export type {
+  AgentLoopInput,
+  AgentLoopResult,
+  AgentLoopShape,
+  AgentTool,
+  AgentToolContext,
+  StopWhen,
+  AgentLoopState,
+} from "./agent.js"
+
 // Protocol helpers
 export { buildOpenAIChatBody, buildOpenAIChatURL, buildOpenAIChatHeaders } from "./protocols/openai-chat.js"
 export { streamFromURL } from "./protocols/sse-parser.js"

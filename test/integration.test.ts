@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { LLMClient, LLMClientLayer, simpleRequest } from "../src/client.js";
 import { ToolChoice } from "../src/schema/index.js";
+import { runAgent, AgentTool } from "../src/agent.js";
+import * as Effect from "effect/Effect";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 
@@ -180,5 +182,91 @@ describe("Integration: JSON Output", () => {
     expect(result).toHaveProperty("language");
     expect(typeof result.greeting).toBe("string");
     expect(typeof result.language).toBe("string");
+  }, 30000);
+});
+
+describe("Integration: Agent Loop", () => {
+  if (!hasEndpoint) {
+    it.skip("skipped — set LLM_BASE_URL to enable", () => {})
+    return
+  }
+  const baseUrl = process.env.LLM_BASE_URL || "http://10.106.1.89:8080/v1";
+  const apiKey = process.env.LLM_API_KEY || "";
+  const model = process.env.LLM_MODEL || "gpt-oss";
+
+  const config = {
+    baseUrl,
+    model,
+    apiKey,
+    maxTokens: 256,
+    temperature: 0.1,
+  };
+
+  it("should execute tools and loop until stop", async () => {
+    const echoTool: AgentTool = {
+      name: "echo",
+      description: "Echo the input message",
+      jsonSchema: { type: "object", properties: { message: { type: "string" } }, required: ["message"] },
+      execute: (params: any) => Effect.succeed(`Echo: ${params.message}`),
+    };
+
+    const result = await Effect.runPromise(
+      runAgent({
+        config,
+        messages: [{ role: "user", content: "Call echo with message 'hello world'" }],
+        tools: [echoTool],
+        maxSteps: 5,
+      }),
+    );
+
+    expect(result.rounds).toBeGreaterThan(0);
+    expect(result.toolCallCount).toBeGreaterThan(0);
+    expect(result.response.content.length).toBeGreaterThan(0);
+    const text = result.response.content.find((p) => p.type === "text") as Extract<typeof p, { type: "text" }> | undefined;
+    expect(text?.text.toLowerCase()).toContain("hello world");
+  }, 30000);
+
+  it("should stop when stopWhen predicate returns true", async () => {
+    let callCount = 0;
+    const tool: AgentTool = {
+      name: "counter",
+      description: "Count calls",
+      jsonSchema: { type: "object", properties: {}, required: [] },
+      execute: () => { callCount++; return Effect.succeed(callCount); },
+    };
+
+    const result = await Effect.runPromise(
+      runAgent({
+        config,
+        messages: [{ role: "user", content: "Keep calling counter" }],
+        tools: [tool],
+        stopWhen: (state) => state.toolCallCount >= 2,
+        maxSteps: 10,
+      }),
+    );
+
+    expect(result.stopReason).toBe("stopWhen");
+    expect(result.toolCallCount).toBeGreaterThanOrEqual(2);
+  }, 30000);
+
+  it("should stop at maxSteps", async () => {
+    const tool: AgentTool = {
+      name: "loop",
+      description: "Keep looping",
+      jsonSchema: { type: "object", properties: {}, required: [] },
+      execute: () => Effect.succeed("looped"),
+    };
+
+    const result = await Effect.runPromise(
+      runAgent({
+        config,
+        messages: [{ role: "user", content: "Keep calling loop" }],
+        tools: [tool],
+        toolChoice: "required",
+        maxSteps: 2,
+      }),
+    );
+
+    expect(result.rounds).toBeLessThanOrEqual(2);
   }, 30000);
 });

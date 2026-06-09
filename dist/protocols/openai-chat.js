@@ -58,16 +58,24 @@ function messageToOpenAI(msg) {
         }
         case "tool": {
             const toolResult = msg.content[0];
-            if (!toolResult || toolResult.type !== "tool-result") {
+            if (!toolResult) {
                 return { role: "tool", content: "", tool_call_id: "" };
             }
-            return {
-                role: "tool",
-                content: typeof toolResult.result.value === "string"
-                    ? toolResult.result.value
-                    : JSON.stringify(toolResult.result.value),
-                tool_call_id: toolResult.id,
-            };
+            // Handle tool-result parts
+            if (toolResult.type === "tool-result") {
+                return {
+                    role: "tool",
+                    content: typeof toolResult.result.value === "string"
+                        ? toolResult.result.value
+                        : JSON.stringify(toolResult.result.value),
+                    tool_call_id: toolResult.id,
+                };
+            }
+            // Handle text content (from reconstructed history)
+            if (toolResult.type === "text") {
+                return { role: "tool", content: toolResult.text, tool_call_id: "" };
+            }
+            return { role: "tool", content: "", tool_call_id: "" };
         }
     }
 }
