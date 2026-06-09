@@ -150,7 +150,11 @@ export interface AgentLoopInput {
   /** Response format */
   readonly responseFormat?: "text" | "json"
   /** Generation options — passed through to the LLM request */
-  readonly generation?: Record<string, unknown>
+   readonly generation?: Record<string, unknown>
+   /** Optional custom client layer (default: LLMClientLayer with caching) */
+   readonly clientLayer?: Layer.Layer<LLMClient, never>
+   /** Optional custom executor layer (default: ToolExecutorLayer) */
+   readonly executorLayer?: Layer.Layer<ToolExecutor, never>
 }
 
 // --- Agent Loop Implementation ---
@@ -358,13 +362,13 @@ function runAgentStream(input: AgentLoopInput): Stream.Stream<LLMEvent, Error> {
         // Emit step-finish event for this round
         const stepFinishEvent = LLMEvent.stepFinish({
           index: round,
-          reason: hasToolCalls ? "tool-calls" : (finishReason ?? "unknown"),
+          reason: finishReason ?? "unknown",
           usage: usage,
         })
 
         // Emit finish event
         const finishEvent = LLMEvent.finish({
-          reason: hasToolCalls ? "tool-calls" : (finishReason ?? "unknown"),
+          reason: finishReason ?? "unknown",
           usage: newAccumulatedUsage,
         })
 
@@ -547,8 +551,8 @@ function runAgentStream(input: AgentLoopInput): Stream.Stream<LLMEvent, Error> {
 
   return Stream.unwrap(
     Effect.gen(function* () {
-      const clientLayer = LLMClientLayer
-      const executorLayer = ToolExecutorLayer
+      const clientLayer = input.clientLayer ?? LLMClientLayer
+      const executorLayer = input.executorLayer ?? ToolExecutorLayer
       return loopStep(initialState, clientLayer, executorLayer)
     }),
   )

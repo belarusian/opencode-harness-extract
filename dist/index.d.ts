@@ -17,7 +17,7 @@ export { Cache, CacheLayer, makeCache } from "./cache.js";
 export type { CacheShape } from "./cache.js";
 export { ToolExecutor, ToolExecutorLayer, makeToolExecutor, makeDynamicTool, toToolDefinition, formatToolResult, ToolFailure, } from "./tool.js";
 export type { Tool, ToolExecuteContext, ToolExecutorShape, ToolFailure as ToolFailureType, } from "./tool.js";
-export { AgentLoop, AgentLoopLayer, makeAgentLoop, runAgent, stepCountIs, } from "./agent.js";
+export { AgentLoop, AgentLoopLayer, makeAgentLoop, runAgent, streamAgent, stepCountIs, } from "./agent.js";
 export type { AgentLoopInput, AgentLoopResult, AgentLoopShape, AgentTool, AgentToolContext, StopWhen, AgentLoopState, } from "./agent.js";
 export { buildOpenAIChatBody, buildOpenAIChatURL, buildOpenAIChatHeaders } from "./protocols/openai-chat.js";
 export { streamFromURL } from "./protocols/sse-parser.js";
