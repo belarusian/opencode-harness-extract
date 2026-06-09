@@ -30,10 +30,10 @@ import {
   ToolCallPart,
   ToolResultPart,
   FinishReason,
-  Usage as _Usage,
 } from "./schema/index.js"
+import { Usage } from "./schema/events-usage.js"
 
-// Re-export make helpers for constructing parts without as unknown as casts
+// Re-export make helpers for constructing parts without type casts
 const ToolCallPartMake = ToolCallPart.make
 const ToolResultPartMake = ToolResultPart.make
 import * as Schema from "effect/Schema"
@@ -186,13 +186,13 @@ function extractToolCalls(events: LLMEvent[]): Array<Extract<LLMEvent, { type: "
 /**
  * Helper: extract usage from step-finish events.
  */
-function extractUsage(events: LLMEvent[]): Schema.Schema.Type<typeof _Usage> | undefined {
+function extractUsage(events: LLMEvent[]): Usage | undefined {
   for (let i = events.length - 1; i >= 0; i--) {
     const event = events[i]
     if (event.type === "step-finish") {
       const stepFinish = event as Extract<LLMEvent, { type: "step-finish" }>
       if (stepFinish.usage) {
-        return stepFinish.usage as unknown as Schema.Schema.Type<typeof _Usage>
+        return stepFinish.usage
       }
     }
   }
@@ -202,7 +202,7 @@ function extractUsage(events: LLMEvent[]): Schema.Schema.Type<typeof _Usage> | u
 /**
  * Helper: build a final response from events with usage tracking.
  */
-function buildResponse(events: LLMEvent[], accumulatedUsage: Schema.Schema.Type<typeof _Usage> | undefined): LLMResponse {
+function buildResponse(events: LLMEvent[], accumulatedUsage: Usage | undefined): LLMResponse {
   const text = extractText(events)
   const finishReason = extractFinishReason(events)
   const usage = extractUsage(events)
@@ -214,7 +214,7 @@ function buildResponse(events: LLMEvent[], accumulatedUsage: Schema.Schema.Type<
       finalUsage = usage
     } else {
       // Merge usage: add tokens from this round to accumulated
-      finalUsage = new _Usage({
+      finalUsage = new Usage({
         inputTokens: (finalUsage.inputTokens ?? 0) + (usage.inputTokens ?? 0),
         outputTokens: (finalUsage.outputTokens ?? 0) + (usage.outputTokens ?? 0),
         totalTokens: (finalUsage.totalTokens ?? 0) + (usage.totalTokens ?? 0),
@@ -285,7 +285,7 @@ export const makeAgentLoop = Layer.effect(
         let lastFinishReason: FinishReason | undefined = undefined
         let lastText = ""
         let lastEvents: LLMEvent[] = []
-        let accumulatedUsage: Schema.Schema.Type<typeof _Usage> | undefined = undefined
+        let accumulatedUsage: Usage | undefined = undefined
 
         const clientLayer = LLMClientLayer
         const executorLayer = ToolExecutorLayer
@@ -424,19 +424,18 @@ export const makeAgentLoop = Layer.effect(
 
           // Build next round's messages from history
           const assistantContentStr = assistantContent.map((p) => {
-            if (p.type === "text") return (p as { text: string }).text
-            if (p.type === "tool-call") {
-              const tc = p as unknown as { name: string; input: unknown }
-              return `[tool-call: ${tc.name}]`
-            }
+            if (p.type === "text") return p.text
+            if (p.type === "tool-call") return `[tool-call: ${p.name}]`
             return ""
           }).join("\n")
 
-          const toolContentStr = toolResults.map((p) => {
-            const tr = p as unknown as { name: string; result: { type: string; value: unknown } }
-            const value = typeof tr.result.value === "string" ? tr.result.value : JSON.stringify(tr.result.value)
-            return `[tool-result: ${tr.name}]: ${value}`
-          }).join("\n")
+          const toolContentStr = toolResults
+            .filter((p): p is Extract<ContentPart, { type: "tool-result" }> => p.type === "tool-result")
+            .map((p) => {
+              const value = typeof p.result.value === "string" ? p.result.value : JSON.stringify(p.result.value)
+              return `[tool-result: ${p.name}]: ${value}`
+            })
+            .join("\n")
 
           history = [
             ...history,
