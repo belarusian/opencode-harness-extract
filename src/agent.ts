@@ -29,10 +29,13 @@ import {
   ContentPart,
   ToolCallPart,
   ToolResultPart,
-  ToolResultValue,
   FinishReason,
   Usage as _Usage,
 } from "./schema/index.js"
+
+// Re-export make helpers for constructing parts without as unknown as casts
+const ToolCallPartMake = ToolCallPart.make
+const ToolResultPartMake = ToolResultPart.make
 import * as Schema from "effect/Schema"
 
 type LLMResponse = Schema.Schema.Type<typeof _LLMResponse>
@@ -239,12 +242,7 @@ function buildAssistantContent(events: LLMEvent[]): ContentPart[] {
   const parts: ContentPart[] = []
   const toolCalls = extractToolCalls(events)
   for (const tc of toolCalls) {
-    parts.push({
-      type: "tool-call",
-      id: tc.id,
-      name: tc.name,
-      input: tc.input,
-    } as unknown as ToolCallPart)
+    parts.push(ToolCallPartMake({ id: tc.id, name: tc.name, input: tc.input }))
   }
   const text = extractText(events)
   if (text.trim()) {
@@ -402,22 +400,24 @@ export const makeAgentLoop = Layer.effect(
             const result = results[i]
             const toolCall = validToolCalls[i]
             if (result.success && result.result) {
-              toolResults.push({
-                type: "tool-result",
-                id: toolCall.id,
-                name: toolCall.name,
-                result: result.result as unknown as ToolResultValue,
-              } as unknown as ToolResultPart)
+              toolResults.push(
+                ToolResultPartMake({
+                  id: toolCall.id,
+                  name: toolCall.name,
+                  result: result.result,
+                }),
+              )
             } else {
-              toolResults.push({
-                type: "tool-result",
-                id: toolCall.id,
-                name: toolCall.name,
-                result: {
-                  type: "error",
-                  value: result.error?.message ?? "Unknown error",
-                },
-              } as unknown as ToolResultPart)
+              toolResults.push(
+                ToolResultPartMake({
+                  id: toolCall.id,
+                  name: toolCall.name,
+                  result: {
+                    type: "error",
+                    value: result.error?.message ?? "Unknown error",
+                  },
+                }),
+              )
             }
           }
           richHistory.push(_Message.make({ role: "tool", content: toolResults }))
