@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { LLMClient, LLMClientLayer, simpleRequest } from "../src/client.js";
-import { ToolChoice } from "../src/schema/index.js";
-import { runAgent, AgentTool, AgentLoopLayer } from "../src/agent.js";
+import { ToolChoice, LLMEvent } from "../src/schema/index.js";
+import { runAgent, streamAgent, AgentTool, AgentLoopLayer } from "../src/agent.js";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 
@@ -342,3 +342,4 @@ describe("Integration: Agent Loop - Streaming", () => {
     expect(toolCallCount).toBeGreaterThanOrEqual(2);
   }, 30000);
 });
+
