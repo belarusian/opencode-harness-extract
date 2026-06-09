@@ -109,6 +109,7 @@ export {
   AgentLoopLayer,
   makeAgentLoop,
   runAgent,
+  stepCountIs,
 } from "./agent.js"
 export type {
   AgentLoopInput,

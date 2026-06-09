@@ -19,7 +19,7 @@ import * as Stream from "effect/Stream"
 import * as Context from "effect/Context"
 import * as Layer from "effect/Layer"
 import { LLMClient, LLMClientLayer, LLMConfig, simpleRequest } from "./client.js"
-import { ToolExecutor, ToolExecutorLayer, ToolFailureType, ToolExecuteContext } from "./tool.js"
+import { ToolExecutor, ToolExecutorLayer, ToolFailureType, ToolExecuteContext, Tool } from "./tool.js"
 
 import {
   LLMResponse as _LLMResponse,
@@ -31,6 +31,7 @@ import {
   ToolResultPart,
   ToolResultValue,
   FinishReason,
+  Usage as _Usage,
 } from "./schema/index.js"
 import * as Schema from "effect/Schema"
 
@@ -41,13 +42,26 @@ type Message = Schema.Schema.Type<typeof _Message>
 
 /**
  * A tool that can be called by the agent during the loop.
- * Extends the base Tool interface with a typed execute handler.
+ * Has a typed execute handler with AgentToolContext.
  */
 export interface AgentTool {
   readonly name: string
   readonly description: string
   readonly jsonSchema: Record<string, unknown>
   readonly execute: (params: unknown, context: AgentToolContext) => Effect.Effect<unknown, ToolFailureType>
+}
+
+/**
+ * Convert an AgentTool to a plain Tool for the ToolExecutor.
+ * Wraps the execute handler to inject step/round context.
+ */
+function toTool(agentTool: AgentTool, round: number): Tool {
+  return {
+    name: agentTool.name,
+    description: agentTool.description,
+    jsonSchema: agentTool.jsonSchema,
+    execute: (params, ctx) => agentTool.execute(params, { ...ctx, step: round, round }),
+  }
 }
 
 /** Context passed to tool execute handlers during the agent loop. */
@@ -127,11 +141,11 @@ export interface AgentLoopInput {
   readonly toolChoice?: "auto" | "none" | "required"
   /** Response format */
   readonly responseFormat?: "text" | "json"
-  /** Generation options */
+  /** Generation options — passed through to the LLM request */
   readonly generation?: Record<string, unknown>
 }
 
-// --- AgentLoop Implementation ---
+// --- Agent Loop Implementation ---
 
 /**
  * Helper: extract text from events.
@@ -147,12 +161,13 @@ function extractText(events: LLMEvent[]): string {
 }
 
 /**
- * Helper: extract finish reason from events.
+ * Helper: extract finish reason from events using proper tagged union narrowing.
  */
 function extractFinishReason(events: LLMEvent[]): FinishReason | undefined {
   for (let i = events.length - 1; i >= 0; i--) {
-    if (events[i].type === "finish") {
-      return (events[i] as any).reason as FinishReason | undefined
+    const event = events[i]
+    if (event.type === "finish") {
+      return (event as Extract<LLMEvent, { type: "finish" }>).reason
     }
   }
   return undefined
@@ -166,11 +181,46 @@ function extractToolCalls(events: LLMEvent[]): Array<Extract<LLMEvent, { type: "
 }
 
 /**
- * Helper: build a final response from events.
+ * Helper: extract usage from step-finish events.
  */
-function buildResponse(events: LLMEvent[]): LLMResponse {
+function extractUsage(events: LLMEvent[]): Schema.Schema.Type<typeof _Usage> | undefined {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i]
+    if (event.type === "step-finish") {
+      const stepFinish = event as Extract<LLMEvent, { type: "step-finish" }>
+      if (stepFinish.usage) {
+        return stepFinish.usage as unknown as Schema.Schema.Type<typeof _Usage>
+      }
+    }
+  }
+  return undefined
+}
+
+/**
+ * Helper: build a final response from events with usage tracking.
+ */
+function buildResponse(events: LLMEvent[], accumulatedUsage: Schema.Schema.Type<typeof _Usage> | undefined): LLMResponse {
   const text = extractText(events)
   const finishReason = extractFinishReason(events)
+  const usage = extractUsage(events)
+
+  // Accumulate usage across rounds
+  let finalUsage = accumulatedUsage
+  if (usage) {
+    if (!finalUsage) {
+      finalUsage = usage
+    } else {
+      // Merge usage: add tokens from this round to accumulated
+      finalUsage = new _Usage({
+        inputTokens: (finalUsage.inputTokens ?? 0) + (usage.inputTokens ?? 0),
+        outputTokens: (finalUsage.outputTokens ?? 0) + (usage.outputTokens ?? 0),
+        totalTokens: (finalUsage.totalTokens ?? 0) + (usage.totalTokens ?? 0),
+        reasoningTokens: (finalUsage.reasoningTokens ?? 0) + (usage.reasoningTokens ?? 0),
+        cacheReadInputTokens: (finalUsage.cacheReadInputTokens ?? 0) + (usage.cacheReadInputTokens ?? 0),
+      })
+    }
+  }
+
   const contentParts: ContentPart[] = []
   if (text.trim()) {
     contentParts.push({ type: "text", text })
@@ -178,7 +228,7 @@ function buildResponse(events: LLMEvent[]): LLMResponse {
   return new _LLMResponse({
     content: contentParts,
     finish: finishReason,
-    usage: undefined,
+    usage: finalUsage,
   })
 }
 
@@ -201,6 +251,14 @@ function buildAssistantContent(events: LLMEvent[]): ContentPart[] {
     parts.push({ type: "text", text })
   }
   return parts
+}
+
+/**
+ * Stop condition helper: stop after N steps.
+ * Mirrors opencode's stepCountIs pattern.
+ */
+export function stepCountIs(maxSteps: number): StopWhen {
+  return (state) => state.round >= maxSteps
 }
 
 export const makeAgentLoop = Layer.effect(
@@ -229,6 +287,7 @@ export const makeAgentLoop = Layer.effect(
         let lastFinishReason: FinishReason | undefined = undefined
         let lastText = ""
         let lastEvents: LLMEvent[] = []
+        let accumulatedUsage: Schema.Schema.Type<typeof _Usage> | undefined = undefined
 
         const clientLayer = LLMClientLayer
         const executorLayer = ToolExecutorLayer
@@ -242,7 +301,7 @@ export const makeAgentLoop = Layer.effect(
             tools: toolDefs,
             toolChoice,
             responseFormat: input.responseFormat,
-            generation: input.generation as any,
+            generation: input.generation,
           })
 
           // Stream the model
@@ -263,7 +322,7 @@ export const makeAgentLoop = Layer.effect(
 
           if (!hasToolCalls) {
             // No tool calls — build final response and exit
-            const response = buildResponse(lastEvents)
+            const response = buildResponse(lastEvents, accumulatedUsage)
 
             return {
               response,
@@ -286,7 +345,7 @@ export const makeAgentLoop = Layer.effect(
           if (validToolCalls.length === 0) {
             // Model returned tool-calls finish reason but no valid tool calls
             // This means the model is stuck — treat as stop
-            const response = buildResponse(lastEvents)
+            const response = buildResponse(lastEvents, accumulatedUsage)
             return {
               response,
               rounds: round,
@@ -297,32 +356,36 @@ export const makeAgentLoop = Layer.effect(
           }
 
           // Execute tools via ToolExecutor
+          // Convert AgentTool to Tool, injecting round context into AgentToolContext
           const executor = yield* Effect.provide(executorLayer)(ToolExecutor)
           const results = yield* executor.executeTools(
             validToolCalls.map((tc) => {
               const agentTool = toolCallMap.get(tc.name)
               if (!agentTool) {
                 return {
-                  tool: {
-                    name: tc.name,
-                    description: "",
-                    jsonSchema: {},
-                    execute: () => Effect.succeed({ type: "text" as const, value: `Tool not found: ${tc.name}` }),
-                  } as any,
+                  tool: toTool(
+                    {
+                      name: tc.name,
+                      description: "",
+                      jsonSchema: {},
+                      execute: () => Effect.succeed({ type: "text" as const, value: `Tool not found: ${tc.name}` }),
+                    },
+                    round,
+                  ),
                   input: tc.input,
                   context: {
                     id: tc.id,
                     name: tc.name,
-                  } as ToolExecuteContext,
+                  },
                 }
               }
               return {
-                tool: agentTool as any,
+                tool: toTool(agentTool, round),
                 input: tc.input,
                 context: {
                   id: tc.id,
                   name: tc.name,
-                } as ToolExecuteContext,
+                },
               }
             }),
           )
@@ -343,7 +406,7 @@ export const makeAgentLoop = Layer.effect(
                 type: "tool-result",
                 id: toolCall.id,
                 name: toolCall.name,
-                result: result.result as ToolResultValue,
+                result: result.result as unknown as ToolResultValue,
               } as unknown as ToolResultPart)
             } else {
               toolResults.push({
@@ -398,7 +461,7 @@ export const makeAgentLoop = Layer.effect(
           }
 
           if (input.stopWhen && input.stopWhen(state)) {
-            const response = buildResponse(lastEvents)
+            const response = buildResponse(lastEvents, accumulatedUsage)
             return {
               response,
               rounds: round,
@@ -410,7 +473,7 @@ export const makeAgentLoop = Layer.effect(
         }
 
         // Max steps reached
-        const response = buildResponse(lastEvents)
+        const response = buildResponse(lastEvents, accumulatedUsage)
         return {
           response,
           rounds: round,
