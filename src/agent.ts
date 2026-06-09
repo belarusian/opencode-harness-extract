@@ -1,17 +1,18 @@
 /**
  * Agent loop — multi-step tool execution with follow-up rounds.
  *
- * Extracted from opencode's session/processor.ts + prompt.ts runLoop.
+ * This module provides two paths:
  *
- * The loop:
- * 1. Streams the model with current messages + tools
- * 2. On tool-calls finish reason, executes the tools
- * 3. Appends assistant + tool-result messages as a follow-up request
- * 4. Loops until stopWhen is satisfied or model returns stop
+ * 1. **Synchronous (runAgent)** — Call it, get a result. Collects all events
+ *    per round, executes tools, builds messages for next round. Returns
+ *    AgentLoopResult when complete.
  *
- * This is the core "agentic" behavior — without it, the harness is
- * just a client. The caller composes the loop by providing tools
- * and a stop condition.
+ * 2. **Reactive (streamAgent)** — Stream of LLMEvents. Text deltas, tool calls,
+ *    tool results, and more text deltas all flow through the same Stream.
+ *    Tools are executed internally, results emitted as tool-result events.
+ *
+ * Both paths share the same loop logic; the difference is whether events are
+ * collected per round or forwarded to the caller.
  */
 
 import * as Effect from "effect/Effect"
@@ -30,12 +31,8 @@ import {
   ToolCallPart,
   ToolResultPart,
   FinishReason,
+  Usage,
 } from "./schema/index.js"
-import { Usage } from "./schema/events-usage.js"
-
-// Re-export make helpers for constructing parts without type casts
-const ToolCallPartMake = ToolCallPart.make
-const ToolResultPartMake = ToolResultPart.make
 import * as Schema from "effect/Schema"
 
 type LLMResponse = Schema.Schema.Type<typeof _LLMResponse>
@@ -98,7 +95,7 @@ export interface AgentLoopState {
 }
 
 /**
- * Result of running the agent loop.
+ * Result of running the agent loop synchronously.
  */
 export interface AgentLoopResult {
   /** The final LLM response */
@@ -119,9 +116,17 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopShape>()("ope
 
 export interface AgentLoopShape {
   /**
-   * Run the agent loop: stream → execute tools → repeat.
+   * Run the agent loop synchronously: stream → execute tools → repeat.
+   * Returns AgentLoopResult when complete.
    */
   readonly run: (input: AgentLoopInput) => Effect.Effect<AgentLoopResult, Error>
+
+  /**
+   * Run the agent loop reactively: returns Stream<LLMEvent> with all events
+   * including text deltas, tool calls, tool results, and more text deltas
+   * across rounds.
+   */
+  readonly stream: (input: AgentLoopInput) => Stream.Stream<LLMEvent, Error>
 }
 
 /**
@@ -242,7 +247,7 @@ function buildAssistantContent(events: LLMEvent[]): ContentPart[] {
   const parts: ContentPart[] = []
   const toolCalls = extractToolCalls(events)
   for (const tc of toolCalls) {
-    parts.push(ToolCallPartMake({ id: tc.id, name: tc.name, input: tc.input }))
+    parts.push(ToolCallPart.make({ id: tc.id, name: tc.name, input: tc.input }))
   }
   const text = extractText(events)
   if (text.trim()) {
@@ -258,6 +263,298 @@ function buildAssistantContent(events: LLMEvent[]): ContentPart[] {
 export function stepCountIs(maxSteps: number): StopWhen {
   return (state) => state.round >= maxSteps
 }
+
+// --- Internal loop state for both run and stream ---
+
+interface LoopState {
+  round: number
+  history: Array<{ role: string; content: string }>
+  richHistory: Message[]
+  toolCallCount: number
+  lastFinishReason: FinishReason | undefined
+  lastText: string
+  accumulatedUsage: Usage | undefined
+}
+
+// --- Stream implementation ---
+
+/**
+ * Internal: run the agent loop and emit events through a stream.
+ * Tools are executed internally, results emitted as tool-result events.
+ */
+function runAgentStream(input: AgentLoopInput): Stream.Stream<LLMEvent, Error> {
+  const maxSteps = input.maxSteps ?? 10
+
+  const initialState: LoopState = {
+    round: 0,
+    history: input.messages.map((m) => ({ role: m.role, content: m.content })),
+    richHistory: [],
+    toolCallCount: 0,
+    lastFinishReason: undefined,
+    lastText: "",
+    accumulatedUsage: undefined,
+  }
+
+  const toolDefs = input.tools.map((t) => ({
+    name: t.name,
+    description: t.description,
+    parameters: t.jsonSchema,
+  }))
+  const toolChoice = input.toolChoice ? _ToolChoice.make(input.toolChoice) : undefined
+
+  const loopStep = (
+    state: LoopState,
+    clientLayer: Layer.Layer<LLMClient>,
+    executorLayer: Layer.Layer<ToolExecutor>,
+  ): Stream.Stream<LLMEvent, Error> => {
+    const { round, history, richHistory, toolCallCount, accumulatedUsage } = state
+
+    // Build the LLM request
+    const request = simpleRequest(input.config, history, {
+      system: input.system,
+      tools: toolDefs,
+      toolChoice,
+      responseFormat: input.responseFormat,
+      generation: input.generation,
+    })
+
+    // Stream the model
+    const modelStream = Stream.unwrap(
+      Effect.gen(function* () {
+        const client = yield* Effect.provide(clientLayer)(LLMClient)
+        return client.stream(request)
+      }),
+    )
+
+    // Process events and decide whether to continue
+    return Stream.unwrap(
+      Effect.gen(function* () {
+        // Collect events from the stream
+        const events = yield* modelStream.pipe(Stream.runCollect)
+
+        // Extract state from events
+        const text = extractText(events)
+        const finishReason = extractFinishReason(events)
+        const toolCallEvents = extractToolCalls(events)
+        const hasToolCalls = toolCallEvents.length > 0
+        const usage = extractUsage(events)
+
+        // Update accumulated usage
+        let newAccumulatedUsage = accumulatedUsage
+        if (usage) {
+          if (!newAccumulatedUsage) {
+            newAccumulatedUsage = usage
+          } else {
+            newAccumulatedUsage = new Usage({
+              inputTokens: (newAccumulatedUsage.inputTokens ?? 0) + (usage.inputTokens ?? 0),
+              outputTokens: (newAccumulatedUsage.outputTokens ?? 0) + (usage.outputTokens ?? 0),
+              totalTokens: (newAccumulatedUsage.totalTokens ?? 0) + (usage.totalTokens ?? 0),
+              reasoningTokens: (newAccumulatedUsage.reasoningTokens ?? 0) + (usage.reasoningTokens ?? 0),
+              cacheReadInputTokens: (newAccumulatedUsage.cacheReadInputTokens ?? 0) + (usage.cacheReadInputTokens ?? 0),
+            })
+          }
+        }
+
+        // Emit step-finish event for this round
+        const stepFinishEvent = LLMEvent.stepFinish({
+          index: round,
+          reason: hasToolCalls ? "tool-calls" : (finishReason ?? "unknown"),
+          usage: usage,
+        })
+
+        // Emit finish event
+        const finishEvent = LLMEvent.finish({
+          reason: hasToolCalls ? "tool-calls" : (finishReason ?? "unknown"),
+          usage: newAccumulatedUsage,
+        })
+
+        // If no tool calls, emit final events and stop
+        if (!hasToolCalls) {
+          return Stream.fromIterable([
+            ...events,
+            stepFinishEvent,
+            finishEvent,
+          ])
+        }
+
+        // Execute tool calls
+        const toolCallMap = new Map<string, AgentTool>()
+        for (const tool of input.tools) {
+          toolCallMap.set(tool.name, tool)
+        }
+
+        // Filter out tool calls with missing IDs
+        const validToolCalls = toolCallEvents.filter((tc) => tc.id && tc.id.trim())
+
+        if (validToolCalls.length === 0) {
+          // Model returned tool-calls finish reason but no valid tool calls
+          return Stream.fromIterable([
+            ...events,
+            stepFinishEvent,
+            finishEvent,
+          ])
+        }
+
+        // Execute tools via ToolExecutor
+        const executor = yield* Effect.provide(executorLayer)(ToolExecutor)
+        const results = yield* executor.executeTools(
+          validToolCalls.map((tc) => {
+            const agentTool = toolCallMap.get(tc.name)
+            if (!agentTool) {
+              return {
+                tool: toTool(
+                  {
+                    name: tc.name,
+                    description: "",
+                    jsonSchema: {},
+                    execute: () => Effect.succeed({ type: "text" as const, value: `Tool not found: ${tc.name}` }),
+                  },
+                  round + 1,
+                ),
+                input: tc.input,
+                context: {
+                  id: tc.id,
+                  name: tc.name,
+                },
+              }
+            }
+            return {
+              tool: toTool(agentTool, round + 1),
+              input: tc.input,
+              context: {
+                id: tc.id,
+                name: tc.name,
+              },
+            }
+          }),
+        )
+
+        // Build assistant message with tool calls
+        const assistantContent = buildAssistantContent(events)
+        const assistantMessage = _Message.make({ role: "assistant", content: assistantContent })
+        const richHistoryWithAssistant = [...richHistory, assistantMessage]
+
+        // Build tool result messages and emit tool-result events
+        const toolResults: ContentPart[] = []
+        let newToolCallCount = toolCallCount + results.length
+
+        const toolResultEvents: LLMEvent[] = []
+        for (let i = 0; i < results.length; i++) {
+          const result = results[i]
+          const toolCall = validToolCalls[i]
+
+          if (result.success && result.result) {
+            toolResults.push(ToolResultPart.make({
+              id: toolCall.id,
+              name: toolCall.name,
+              result: result.result,
+            }))
+            toolResultEvents.push(LLMEvent.toolResult({
+              id: toolCall.id,
+              name: toolCall.name,
+              result: result.result,
+            }))
+          } else {
+            toolResults.push(ToolResultPart.make({
+              id: toolCall.id,
+              name: toolCall.name,
+              result: {
+                type: "error",
+                value: result.error?.message ?? "Unknown error",
+              },
+            }))
+            toolResultEvents.push(LLMEvent.toolResult({
+              id: toolCall.id,
+              name: toolCall.name,
+              result: {
+                type: "error",
+                value: result.error?.message ?? "Unknown error",
+              },
+            }))
+          }
+        }
+
+        const richHistoryWithTools = [...richHistoryWithAssistant, _Message.make({ role: "tool", content: toolResults })]
+
+        // Build next round's messages
+        const assistantContentStr = assistantContent.map((p) => {
+          if (p.type === "text") return p.text
+          if (p.type === "tool-call") return `[tool-call: ${p.name}]`
+          return ""
+        }).join("\n")
+
+        const toolContentStr = toolResults
+          .filter((p): p is Extract<ContentPart, { type: "tool-result" }> => p.type === "tool-result")
+          .map((p) => {
+            const value = typeof p.result.value === "string" ? p.result.value : JSON.stringify(p.result.value)
+            return `[tool-result: ${p.name}]: ${value}`
+          })
+          .join("\n")
+
+        const newHistory = [
+          ...history,
+          { role: "assistant", content: assistantContentStr },
+          { role: "tool", content: toolContentStr },
+        ]
+
+        // Check stop condition
+        const state: AgentLoopState = {
+          round: round + 1,
+          messageCount: newHistory.length,
+          toolCallCount: newToolCallCount,
+          lastFinishReason: finishReason,
+          hasToolCalls: true,
+          lastText: text,
+        }
+
+        if (input.stopWhen && input.stopWhen(state)) {
+          return Stream.fromIterable([
+            ...events,
+            ...toolResultEvents,
+            stepFinishEvent,
+            finishEvent,
+          ])
+        }
+
+        // Check max steps
+        if (round + 1 >= maxSteps) {
+          return Stream.fromIterable([
+            ...events,
+            ...toolResultEvents,
+            stepFinishEvent,
+            finishEvent,
+          ])
+        }
+
+        // Continue with next round
+        const nextState: LoopState = {
+          round: round + 1,
+          history: newHistory,
+          richHistory: richHistoryWithTools,
+          toolCallCount: newToolCallCount,
+          lastFinishReason: finishReason,
+          lastText: text,
+          accumulatedUsage: newAccumulatedUsage,
+        }
+
+        return Stream.concat(
+          Stream.fromIterable([...events, ...toolResultEvents]),
+          loopStep(nextState, clientLayer, executorLayer),
+        )
+      }),
+    )
+  }
+
+  return Stream.unwrap(
+    Effect.gen(function* () {
+      const clientLayer = LLMClientLayer
+      const executorLayer = ToolExecutorLayer
+      return loopStep(initialState, clientLayer, executorLayer)
+    }),
+  )
+}
+
+// --- Service implementation ---
 
 export const makeAgentLoop = Layer.effect(
   AgentLoop,
@@ -401,7 +698,7 @@ export const makeAgentLoop = Layer.effect(
             const toolCall = validToolCalls[i]
             if (result.success && result.result) {
               toolResults.push(
-                ToolResultPartMake({
+                ToolResultPart.make({
                   id: toolCall.id,
                   name: toolCall.name,
                   result: result.result,
@@ -409,7 +706,7 @@ export const makeAgentLoop = Layer.effect(
               )
             } else {
               toolResults.push(
-                ToolResultPartMake({
+                ToolResultPart.make({
                   id: toolCall.id,
                   name: toolCall.name,
                   result: {
@@ -483,7 +780,11 @@ export const makeAgentLoop = Layer.effect(
       })
     }
 
-    return AgentLoop.of({ run })
+    const stream = (input: AgentLoopInput): Stream.Stream<LLMEvent, Error> => {
+      return runAgentStream(input)
+    }
+
+    return AgentLoop.of({ run, stream })
   }),
 )
 
@@ -493,11 +794,25 @@ export const AgentLoopLayer = makeAgentLoop.pipe(
 )
 
 /**
- * Convenience: run the agent loop with default layers.
+ * Convenience: run the agent loop synchronously with default layers.
  */
 export function runAgent(input: AgentLoopInput): Effect.Effect<AgentLoopResult, Error> {
   return Effect.gen(function* () {
     const loop = yield* Effect.provide(AgentLoopLayer)(AgentLoop)
     return yield* loop.run(input)
   })
+}
+
+/**
+ * Convenience: run the agent loop reactively with default layers.
+ * Returns Stream<LLMEvent> with all events including text deltas, tool calls,
+ * tool results, and more text deltas across rounds.
+ */
+export function streamAgent(input: AgentLoopInput): Stream.Stream<LLMEvent, Error> {
+  return Stream.unwrap(
+    Effect.gen(function* () {
+      const loop = yield* Effect.provide(AgentLoopLayer)(AgentLoop)
+      return loop.stream(input)
+    }),
+  )
 }

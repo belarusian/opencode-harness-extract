@@ -1,8 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { LLMClient, LLMClientLayer, simpleRequest } from "../src/client.js";
 import { ToolChoice } from "../src/schema/index.js";
-import { runAgent, AgentTool } from "../src/agent.js";
-import * as Effect from "effect/Effect";
+import { runAgent, AgentTool, AgentLoopLayer } from "../src/agent.js";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 
@@ -268,5 +267,78 @@ describe("Integration: Agent Loop", () => {
     );
 
     expect(result.rounds).toBeLessThanOrEqual(2);
+  }, 30000);
+});
+
+describe("Integration: Agent Loop - Streaming", () => {
+  if (!hasEndpoint) {
+    it.skip("skipped — set LLM_BASE_URL to enable", () => {})
+    return
+  }
+  const baseUrl = process.env.LLM_BASE_URL || "http://10.106.1.89:8080/v1";
+  const apiKey = process.env.LLM_API_KEY || "";
+  const model = process.env.LLM_MODEL || "gpt-oss";
+
+  const config = {
+    baseUrl,
+    model,
+    apiKey,
+    maxTokens: 256,
+    temperature: 0.1,
+  };
+
+  it("should stream text and tool calls interleaved", async () => {
+    const echoTool: AgentTool = {
+      name: "echo",
+      description: "Echo the input message",
+      jsonSchema: { type: "object", properties: { message: { type: "string" } }, required: ["message"] },
+      execute: (params: any) => Effect.succeed(`Echo: ${params.message}`),
+    };
+
+    const events: LLMEvent[] = [];
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const loop = yield* Effect.provide(AgentLoopLayer)(AgentLoop);
+        return yield* loop.stream({
+          config,
+          messages: [{ role: "user", content: "Call echo with message 'hello world'" }],
+          tools: [echoTool],
+          maxSteps: 5,
+        }).pipe(Stream.runCollect);
+      }),
+    );
+
+    const eventTypes = [...result].map((e) => e.type);
+    expect(eventTypes).toContain("text-delta");
+    expect(eventTypes).toContain("tool-call");
+    expect(eventTypes).toContain("tool-result");
+    expect(eventTypes).toContain("finish");
+  }, 30000);
+
+  it("should stop when stopWhen predicate returns true", async () => {
+    let callCount = 0;
+    const tool: AgentTool = {
+      name: "counter",
+      description: "Count calls",
+      jsonSchema: { type: "object", properties: {}, required: [] },
+      execute: () => { callCount++; return Effect.succeed(callCount); },
+    };
+
+    const events: LLMEvent[] = [];
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const loop = yield* Effect.provide(AgentLoopLayer)(AgentLoop);
+        return yield* loop.stream({
+          config,
+          messages: [{ role: "user", content: "Keep calling counter" }],
+          tools: [tool],
+          stopWhen: (state) => state.toolCallCount >= 2,
+          maxSteps: 10,
+        }).pipe(Stream.runCollect);
+      }),
+    );
+
+    const toolCallCount = [...result].filter((e) => e.type === "tool-call").length;
+    expect(toolCallCount).toBeGreaterThanOrEqual(2);
   }, 30000);
 });
