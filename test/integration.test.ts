@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { LLMClient, LLMClientLayer, simpleRequest } from "../src/client.js";
 import { ToolChoice, LLMEvent } from "../src/schema/index.js";
+import { AgentLoop } from "../src/agent.js";
 import { runAgent, streamAgent, AgentTool, AgentLoopLayer } from "../src/agent.js";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
