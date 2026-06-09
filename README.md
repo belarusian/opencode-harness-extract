@@ -1,6 +1,9 @@
 # @opencode-harness/llm
 
-A standalone LLM client extracted from opencode's `packages/llm`. Provides the core infrastructure for agent loops: unified `LLMEvent` streams, tool execution, and OpenAI-compatible API support.
+A standalone LLM client extracted from opencode's `packages/llm`. Provides the core infrastructure for agent loops with **two execution paths**:
+
+1. **Synchronous (`runAgent`)** — "Call it, get a result" — collects all events per round, returns `AgentLoopResult`
+2. **Reactive (`streamAgent`)** — Real-time streaming — returns `Stream<LLMEvent>` with text deltas, tool calls, tool results, and more text deltas all interleaved across rounds
 
 ## Overview
 
@@ -9,10 +12,11 @@ This package provides:
 - **LLMEvent** — Unified event contract for LLM streams (text, tools, reasoning, usage, errors)
 - **LLMClient** — Effect-based client with `stream()`, `generate()`, `generateObject()`
 - **Tool system** — `Tool`, `ToolExecutor`, `ToolFailure`, `ToolExecuteContext`, `formatToolResult()`
-- **OpenAI Chat protocol** — `buildOpenAIChatBody()` converts `LLMRequest` to `chat/completions` JSON
+- **OpenAI Chat protocol** — `buildOpenAIChatBody()` (streaming) and `buildOpenAIChatStreamBody()` (non-streaming) for `chat/completions` JSON
 - **SSE stream parser** — `streamFromURL()` converts OpenAI SSE → `Stream<LLMEvent>`
 - **Schema layer** — `LLMRequest`, `LLMResponse`, `Message`, `ToolDefinition`, `Model`, `Usage`, errors
 - **Caching** — In-memory `Cache` service
+- **Agent Loop** — `runAgent()` (synchronous) and `streamAgent()` (reactive) for multi-step tool execution
 
 ## Installation
 
@@ -22,7 +26,7 @@ pnpm add github:belarusian/opencode-harness-extract effect
 
 ## Quick Start
 
-### Streaming with LLMEvents
+### Streaming with LLMEvents (LLMClient)
 
 ```typescript
 import { LLMClient, LLMClientLayer, simpleRequest } from "@opencode-harness/llm";
@@ -76,6 +80,8 @@ const program = Effect.gen(function* () {
   const result = yield* client.generateObject<{ name: string; age: number }>(request);
   console.log(result); // { name: "Alice", age: 30 }
 });
+
+Effect.runPromise(program);
 ```
 
 ### Tool Execution
@@ -99,6 +105,102 @@ const program = Effect.gen(function* () {
   });
   console.log(result); // { type: "json", value: { echoed: "Hello" } }
 });
+
+Effect.runPromise(program);
+```
+
+### Synchronous Agent Loop (`runAgent`)
+
+```typescript
+import { runAgent, AgentTool } from "@opencode-harness/llm";
+import * as Effect from "effect/Effect";
+
+const echoTool: AgentTool = {
+  name: "echo",
+  description: "Echo the input message",
+  jsonSchema: { type: "object", properties: { message: { type: "string" } }, required: ["message"] },
+  execute: (params: any, context) => Effect.succeed(`Echo: ${params.message} (step ${context.step}, round ${context.round})`),
+};
+
+const result = await Effect.runPromise(
+  runAgent({
+    config,
+    messages: [{ role: "user", content: "Call echo with message 'hello world'" }],
+    tools: [echoTool],
+    maxSteps: 5,
+  }),
+);
+
+console.log(result.response.content); // Final response
+console.log(result.rounds); // Number of rounds executed
+console.log(result.toolCallCount); // Total tool calls made
+console.log(result.messages); // Full conversation history
+console.log(result.stopReason); // "stop" | "maxSteps" | "stopWhen"
+```
+
+### Reactive Agent Loop (`streamAgent`)
+
+```typescript
+import { streamAgent, AgentTool, LLMEvent } from "@opencode-harness/llm";
+import * as Effect from "effect/Effect";
+import * as Stream from "effect/Stream";
+
+const echoTool: AgentTool = {
+  name: "echo",
+  description: "Echo the input message",
+  jsonSchema: { type: "object", properties: { message: { type: "string" } }, required: ["message"] },
+  execute: (params: any, context) => Effect.succeed(`Echo: ${params.message} (step ${context.step}, round ${context.round})`),
+};
+
+const program = Effect.gen(function* () {
+  const events = yield* streamAgent({
+    config,
+    messages: [{ role: "user", content: "Call echo with message 'hello world'" }],
+    tools: [echoTool],
+    maxSteps: 5,
+  }).pipe(Stream.runCollect);
+
+  // Events include: text-delta, tool-call, tool-result, text-delta, finish, etc.
+  const eventTypes = [...events].map((e) => e.type);
+  console.log(eventTypes);
+  // ["step-start", "text-delta", "text-delta", "tool-call", "tool-result", "step-finish", "finish"]
+});
+
+Effect.runPromise(program);
+```
+
+### Custom Stop Condition
+
+```typescript
+import { runAgent, AgentTool, stepCountIs } from "@opencode-harness/llm";
+import * as Effect from "effect/Effect";
+
+const tool: AgentTool = {
+  name: "counter",
+  description: "Count calls",
+  jsonSchema: { type: "object", properties: {}, required: [] },
+  execute: () => Effect.succeed("counted"),
+};
+
+// Use the built-in stepCountIs helper
+const result1 = await Effect.runPromise(
+  runAgent({
+    config,
+    messages: [{ role: "user", content: "Keep calling counter" }],
+    tools: [tool],
+    stopWhen: stepCountIs(5), // Stop after 5 rounds
+  }),
+);
+
+// Or define your own stop condition
+const result2 = await Effect.runPromise(
+  runAgent({
+    config,
+    messages: [{ role: "user", content: "Keep calling counter" }],
+    tools: [tool],
+    stopWhen: (state) => state.toolCallCount >= 3, // Stop after 3 tool calls
+  }),
+);
 ```
 
 ## API
@@ -113,6 +215,30 @@ interface LLMClientShape {
   readonly generate: (request: LLMRequest) => Effect.Effect<LLMResponse, LLMError>;
   readonly generateObject: <T>(request: LLMRequest) => Effect.Effect<T, LLMError>;
 }
+```
+
+### AgentLoop Service
+
+```typescript
+class AgentLoop extends Context.Service<AgentLoop, AgentLoopShape>()("opencode-harness/AgentLoop") {}
+
+interface AgentLoopShape {
+  readonly run: (input: AgentLoopInput) => Effect.Effect<AgentLoopResult, Error>;
+  readonly stream: (input: AgentLoopInput) => Stream.Stream<LLMEvent, Error>;
+}
+```
+
+### Convenience Functions
+
+```typescript
+// Synchronous
+runAgent(input: AgentLoopInput): Effect.Effect<AgentLoopResult, Error>
+
+// Reactive
+streamAgent(input: AgentLoopInput): Stream.Stream<LLMEvent, Error>
+
+// Stop condition helper
+stepCountIs(maxSteps: number): StopWhen
 ```
 
 ### LLMEvent Types
@@ -166,6 +292,17 @@ yield* executor.executeTools([
 ]);
 ```
 
+### AgentTool Context
+
+Tools receive `AgentToolContext` which extends `ToolExecuteContext`:
+
+```typescript
+interface AgentToolContext extends ToolExecuteContext {
+  readonly step: number; // Current step in the round
+  readonly round: number; // Current round number (1-indexed)
+}
+```
+
 ### Protocol Helpers
 
 ```typescript
@@ -196,6 +333,14 @@ The harness provides the components opencode's agent loop needs:
 3. **Transport** — SSE stream parser (`streamFromURL`) producing `Stream<LLMEvent>`
 4. **Client** — `LLMClient` service wrapping stream/generate/generateObject
 5. **Tools** — `ToolExecutor` with parallel execution and error handling
+6. **Agent Loop** — `AgentLoop` service with `run()` and `stream()` methods
+
+### Two Paths
+
+| Path | Returns | Use Case |
+|---|---|---|
+| `runAgent()` | `AgentLoopResult` | "Call it, get a result" — simple synchronous usage |
+| `streamAgent()` | `Stream<LLMEvent>` | Real-time streaming — UI updates, progress indicators |
 
 ## Projects Using This
 

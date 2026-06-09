@@ -13,6 +13,7 @@ A minimal LLM client for building agent loops with local-first inference:
 5. **SSE stream parser** — `streamFromURL()` producing `Stream<LLMEvent>`
 6. **Schema layer** — `LLMRequest`, `LLMResponse`, `Message`, `ToolDefinition`, `Model`, `Usage`, errors
 7. **Caching** — In-memory `Cache` service
+8. **Agent Loop** — `runAgent()` (synchronous) and `streamAgent()` (reactive) for multi-step tool execution
 
 ## Architecture
 
@@ -22,6 +23,7 @@ src/
 ├── client.ts             - LLMClient service (stream, generate, generateObject)
 ├── tool.ts               - ToolExecutor, ToolFailure, makeDynamicTool
 ├── cache.ts              - Cache service
+├── agent.ts              - AgentLoop service (runAgent, streamAgent)
 ├── schema/               - Type definitions
 │   ├── ids.ts            - ProviderID, ToolCallID, FinishReason, etc.
 │   ├── messages.ts       - Message, ToolDefinition, ToolChoice, LLMRequest, Model
@@ -87,7 +89,7 @@ const items = [...collection] // not collection.toArray()
 ```bash
 pnpm install
 pnpm build      # TypeScript compilation
-pnpm test       # 18 unit tests, 5 integration tests (skipped without LLM_BASE_URL)
+pnpm test       # 25 unit tests, 5 integration tests (skipped without LLM_BASE_URL)
 ```
 
 ### Environment Variables (for integration tests)
@@ -120,6 +122,13 @@ LLM_BASE_URL="http://localhost:8080/v1" LLM_API_KEY="your-key" npx vitest run te
 - Uses `response_format: { type: "json_object" }`
 - Parses JSON from response text, strips markdown code fences
 
+### Agent Loop
+- **Synchronous (`runAgent`)** — Collects events per round, executes tools, returns `AgentLoopResult`
+- **Reactive (`streamAgent`)** — Returns `Stream<LLMEvent>` with all events interleaved across rounds
+- Both paths share the same loop logic
+- `AgentToolContext` provides `step` and `round` to tool handlers
+- `stepCountIs()` helper for stop conditions
+
 ### Known Issues / Future Work
 - `generateObject()` error handling for empty responses
 - SSE parser: `content_filter` finish_reason with empty delta
@@ -141,10 +150,16 @@ LLM_BASE_URL="http://localhost:8080/v1" LLM_API_KEY="your-key" npx vitest run te
 1. Use `makeDynamicTool(name, description, jsonSchema, execute)` in consuming code
 2. Execute via `ToolExecutor.execute(tool, input, context)`
 
+### To add a new agent loop feature:
+1. Add types to `src/agent.ts`
+2. Implement in `makeAgentLoop` (both `run` and `stream` methods)
+3. Export from `src/index.ts`
+4. Add integration tests in `test/integration.test.ts`
+
 ## Testing
 
 ```bash
-pnpm test                    # All unit tests (18 passing)
+pnpm test                    # All unit tests (25 passing)
 pnpm test test/tool.test.ts  # Tool execution tests
 pnpm test test/client.test.ts # Client request building tests
 pnpm test test/cache.test.ts # Cache tests
@@ -180,9 +195,16 @@ pnpm test test/cache.test.ts # Cache tests
 - `generate()` uses direct `fetch` + JSON parsing
 - `generateObject()` uses direct `fetch` + JSON parsing + markdown stripping
 
+### Agent Loop
+- `runAgent()` — synchronous path: collects events per round, returns `AgentLoopResult`
+- `streamAgent()` — reactive path: returns `Stream<LLMEvent>` with all events interleaved
+- Both share the same loop logic; difference is whether events are collected or forwarded
+- `AgentToolContext.step`/`round` injected via `toTool()` wrapper
+
 ## References
 
 - Effect v4 docs: https://effect.website/docs
 - OpenAI API: https://platform.ai/docs/api-reference/chat
 - @opencode-harness/llm: https://github.com/belarusian/opencode-harness-extract
 - Source extracted from: `/Users/av4nda/Code/opencode/packages/llm/`
+- Original opencode repository: https://github.com/anomalyco/opencode
