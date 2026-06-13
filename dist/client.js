@@ -318,7 +318,7 @@ export function simpleStream(input) {
                                 continue;
                             try {
                                 const parsed = JSON.parse(data);
-                                const choice = parsed.choice?.[0];
+                                const choice = parsed.choices?.[0];
                                 if (choice?.delta?.content) {
                                     yield {
                                         type: "text-delta",
