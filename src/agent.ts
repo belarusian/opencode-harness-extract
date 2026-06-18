@@ -378,7 +378,7 @@ function runAgentStream(input: AgentLoopInput): Stream.Stream<LLMEvent, Error> {
         if (!hasToolCalls) {
           const finalState: AgentLoopState = {
             round: round + 1,
-            messageCount: history.length + 2,
+            messageCount: history.length,
             toolCallCount,
             lastFinishReason: finishReason,
             hasToolCalls: false,
@@ -406,7 +406,7 @@ function runAgentStream(input: AgentLoopInput): Stream.Stream<LLMEvent, Error> {
           // Model returned tool-calls finish reason but no valid tool calls — fire callback with stuck state
           const stuckState: AgentLoopState = {
             round: round + 1,
-            messageCount: history.length + 2,
+            messageCount: history.length,
             toolCallCount,
             lastFinishReason: finishReason,
             hasToolCalls: false,
@@ -815,7 +815,16 @@ export const makeAgentLoop = Layer.effect(
           }
         }
 
-             // Max steps reached
+        // Max steps reached
+        const stateMax: AgentLoopState = {
+          round,
+          messageCount: history.length,
+          toolCallCount,
+          lastFinishReason,
+          hasToolCalls: false,
+          lastText,
+        }
+        if (input.onRound) { try { input.onRound(stateMax); } catch {} }
         const response = buildResponse(lastEvents, accumulatedUsage)
         return {
           response,
