@@ -150,11 +150,13 @@ export interface AgentLoopInput {
   /** Response format */
   readonly responseFormat?: "text" | "json"
   /** Generation options — passed through to the LLM request */
-   readonly generation?: Record<string, unknown>
+  readonly generation?: Record<string, unknown>
    /** Optional custom client layer (default: LLMClientLayer with caching) */
    readonly clientLayer?: Layer.Layer<LLMClient, never>
    /** Optional custom executor layer (default: ToolExecutorLayer) */
    readonly executorLayer?: Layer.Layer<ToolExecutor, never>
+  /** Optional callback invoked after each round — receives current loop state for heartbeat persistence */
+  readonly onRound?: (state: AgentLoopState) => void
 }
 
 // --- Agent Loop Implementation ---
@@ -374,6 +376,16 @@ function runAgentStream(input: AgentLoopInput): Stream.Stream<LLMEvent, Error> {
 
         // If no tool calls, emit final events and stop
         if (!hasToolCalls) {
+          const finalState: AgentLoopState = {
+            round: round + 1,
+            messageCount: history.length + 2,
+            toolCallCount,
+            lastFinishReason: finishReason,
+            hasToolCalls: false,
+            lastText: text,
+          };
+          if (input.onRound) { try { input.onRound(finalState); } catch {} }
+
           return Stream.fromIterable([
             ...events,
             stepFinishEvent,
@@ -391,6 +403,17 @@ function runAgentStream(input: AgentLoopInput): Stream.Stream<LLMEvent, Error> {
         const validToolCalls = toolCallEvents.filter((tc) => tc.id && tc.id.trim())
 
         if (validToolCalls.length === 0) {
+          // Model returned tool-calls finish reason but no valid tool calls — fire callback with stuck state
+          const stuckState: AgentLoopState = {
+            round: round + 1,
+            messageCount: history.length + 2,
+            toolCallCount,
+            lastFinishReason: finishReason,
+            hasToolCalls: false,
+            lastText: text,
+          };
+          if (input.onRound) { try { input.onRound(stuckState); } catch {} }
+
           // Model returned tool-calls finish reason but no valid tool calls
           return Stream.fromIterable([
             ...events,
@@ -511,6 +534,11 @@ function runAgentStream(input: AgentLoopInput): Stream.Stream<LLMEvent, Error> {
           lastText: text,
         }
 
+        // Fire onRound callback for heartbeat persistence
+        if (input.onRound) {
+          try { input.onRound(state); } catch { /* heartbeat failure should not crash agent */ }
+        }
+
         if (input.stopWhen && input.stopWhen(state)) {
           return Stream.fromIterable([
             ...events,
@@ -621,6 +649,16 @@ export const makeAgentLoop = Layer.effect(
 
           if (!hasToolCalls) {
             // No tool calls — build final response and exit
+            const noToolState: AgentLoopState = {
+              round,
+              messageCount: history.length + 2,
+              toolCallCount,
+              lastFinishReason,
+              hasToolCalls: false,
+              lastText,
+            };
+            if (input.onRound) { try { input.onRound(noToolState); } catch {} }
+
             const response = buildResponse(lastEvents, accumulatedUsage)
 
             return {
@@ -750,7 +788,7 @@ export const makeAgentLoop = Layer.effect(
             },
           ]
 
-          // Check stop condition
+            // Check stop condition
           const state: AgentLoopState = {
             round,
             messageCount: history.length,
@@ -758,6 +796,11 @@ export const makeAgentLoop = Layer.effect(
             lastFinishReason,
             hasToolCalls: true,
             lastText,
+          }
+
+          // Fire onRound callback for heartbeat persistence
+          if (input.onRound) {
+            try { input.onRound(state); } catch { /* heartbeat failure should not crash agent */ }
           }
 
           if (input.stopWhen && input.stopWhen(state)) {
@@ -772,7 +815,7 @@ export const makeAgentLoop = Layer.effect(
           }
         }
 
-        // Max steps reached
+             // Max steps reached
         const response = buildResponse(lastEvents, accumulatedUsage)
         return {
           response,
