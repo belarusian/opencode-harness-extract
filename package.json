@@ -1,7 +1,7 @@
 {
-  "name": "@opencode-harness/llm",
+  "name": "@belarusian/llm",
   "version": "0.1.0",
-  "description": "Standalone LLM client extracted from opencode",
+  "description": "Standalone LLM client — Effect-based client for LLM API calls with streaming, agent loop, tool execution, and caching.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -29,13 +29,19 @@
     "typescript": "^5.7.2",
     "vitest": "^3.2.6"
   },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://npm.pkg.github.com"
+  },
   "files": [
     "dist"
   ],
   "keywords": [
     "llm",
     "effect",
-    "opencode"
+    "opencode",
+    "agent",
+    "local-inference"
   ],
   "license": "MIT",
   "repository": {
