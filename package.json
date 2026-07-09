@@ -22,7 +22,7 @@
     "@smithy/eventstream-codec": "4.2.14",
     "@smithy/util-utf8": "4.2.2",
     "aws4fetch": "1.0.20",
-    "effect": "4.0.0-beta.70"
+    "effect": "4.0.0-beta.91"
   },
   "devDependencies": {
     "@types/node": "^22.19.19",
