@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This document explains how to work in the `@opencode-harness/llm` codebase — a standalone LLM client extracted from opencode's `packages/llm`.
+This document explains how to work in the `@belarusian/llm` codebase — a standalone LLM client extracted from opencode's `packages/llm`.
 
 ## What This Package Provides
 
@@ -205,6 +205,6 @@ pnpm test test/cache.test.ts # Cache tests
 
 - Effect v4 docs: https://effect.website/docs
 - OpenAI API: https://platform.ai/docs/api-reference/chat
-- @opencode-harness/llm: https://github.com/belarusian/opencode-harness-extract
+- @belarusian/llm: https://github.com/belarusian/opencode-harness-extract
 - Source extracted from: `/Users/av4nda/Code/opencode/packages/llm/`
 - Original opencode repository: https://github.com/anomalyco/opencode

@@ -1,4 +1,4 @@
-# @opencode-harness/llm
+# @belarusian/llm
 
 A standalone LLM client extracted from opencode's `packages/llm`. Provides the core infrastructure for agent loops with **two execution paths**:
 
@@ -29,7 +29,7 @@ pnpm add github:belarusian/opencode-harness-extract effect
 ### Streaming with LLMEvents (LLMClient)
 
 ```typescript
-import { LLMClient, LLMClientLayer, simpleRequest } from "@opencode-harness/llm";
+import { LLMClient, LLMClientLayer, simpleRequest } from "@belarusian/llm";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 
@@ -87,7 +87,7 @@ Effect.runPromise(program);
 ### Tool Execution
 
 ```typescript
-import { ToolExecutor, ToolExecutorLayer, makeDynamicTool } from "@opencode-harness/llm";
+import { ToolExecutor, ToolExecutorLayer, makeDynamicTool } from "@belarusian/llm";
 
 const program = Effect.gen(function* () {
   const executor = yield* Effect.provide(ToolExecutorLayer)(ToolExecutor);
@@ -112,7 +112,7 @@ Effect.runPromise(program);
 ### Synchronous Agent Loop (`runAgent`)
 
 ```typescript
-import { runAgent, AgentTool } from "@opencode-harness/llm";
+import { runAgent, AgentTool } from "@belarusian/llm";
 import * as Effect from "effect/Effect";
 
 const echoTool: AgentTool = {
@@ -141,7 +141,7 @@ console.log(result.stopReason); // "stop" | "maxSteps" | "stopWhen"
 ### Reactive Agent Loop (`streamAgent`)
 
 ```typescript
-import { streamAgent, AgentTool, LLMEvent } from "@opencode-harness/llm";
+import { streamAgent, AgentTool, LLMEvent } from "@belarusian/llm";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 
@@ -172,7 +172,7 @@ Effect.runPromise(program);
 ### Custom Stop Condition
 
 ```typescript
-import { runAgent, AgentTool, stepCountIs } from "@opencode-harness/llm";
+import { runAgent, AgentTool, stepCountIs } from "@belarusian/llm";
 import * as Effect from "effect/Effect";
 
 const tool: AgentTool = {
@@ -307,16 +307,16 @@ interface AgentToolContext extends ToolExecuteContext {
 
 ```typescript
 // Build chat/completions body from LLMRequest
-import { buildOpenAIChatBody, buildOpenAIChatURL, buildOpenAIChatHeaders } from "@opencode-harness/llm";
+import { buildOpenAIChatBody, buildOpenAIChatURL, buildOpenAIChatHeaders } from "@belarusian/llm";
 
 // Parse SSE stream into LLMEvent stream
-import { streamFromURL } from "@opencode-harness/llm";
+import { streamFromURL } from "@belarusian/llm";
 ```
 
 ### Caching
 
 ```typescript
-import { Cache, CacheLayer } from "@opencode-harness/llm";
+import { Cache, CacheLayer } from "@belarusian/llm";
 
 const program = Effect.gen(function* () {
   const client = yield* Effect.provide(CacheLayer)(LLMClient);
