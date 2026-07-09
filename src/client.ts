@@ -43,6 +43,7 @@ type Usage = Schema.Schema.Type<typeof _Usage>
 import { buildOpenAIChatBody, buildOpenAIChatURL, buildOpenAIChatHeaders, buildOpenAIChatStreamBody } from "./protocols/openai-chat.js"
 import { streamFromBody, mapFinishReason } from "./protocols/sse-parser.js"
 import { isRecord } from "./utils/record.js"
+import { retryWithBackoff } from "./retry.js"
 
 // --- Configuration ---
 
@@ -197,7 +198,7 @@ export const makeLLMClient = Layer.effect(
       const url = buildOpenAIChatURL(baseUrl)
       const headers = buildOpenAIChatHeaders(apiKey)
 
-      return Effect.tryPromise({
+      return retryWithBackoff(Effect.tryPromise({
         try: () => fetch(url, { method: "POST", headers, body: JSON.stringify(finalBody) }),
         catch: (error) => ({
           _tag: "APIError" as const,
@@ -283,6 +284,7 @@ export const makeLLMClient = Layer.effect(
           }))
         }),
       )
+    )
     }
 
     const generateObject = <T>(request: LLMRequest): Effect.Effect<T, LLMError> => {

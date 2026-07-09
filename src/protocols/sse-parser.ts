@@ -120,32 +120,43 @@ function parseChunk(chunk: OpenAISSEChunk, state: ParseState): LLMEvent[] {
       const key = `${tc.index}`
       let toolCall = state.toolCalls.get(key)
 
-      // New tool call starting
-      if (tc.id && !toolCall) {
-        toolCall = {
-          id: tc.id,
-          name: tc.function?.name ?? "",
-          args: "",
-        }
-        state.toolCalls.set(key, toolCall)
+      // New tool call starting — accept either explicit id or name+arguments as signal
+      if (!toolCall) {
+        const hasName = !!tc.function?.name
+        const hasArgs = !!tc.function?.arguments
+        const hasId = !!tc.id
 
-        events.push({
-          type: "tool-input-start",
-          id: ToolCallID.make(tc.id),
-          name: tc.function?.name ?? "unknown",
-        })
+        // If we have a tool call with name but no registered state, create it
+        if (hasName || hasArgs) {
+          const generatedId = tc.id ?? `tool-${state.stepIndex}-${key}`
+          toolCall = {
+            id: generatedId,
+            name: tc.function?.name ?? "unknown",
+            args: "",
+          }
+          state.toolCalls.set(key, toolCall)
 
-        if (tc.function?.name) {
           events.push({
-            type: "tool-call",
-            id: ToolCallID.make(tc.id),
-            name: tc.function.name,
-            input: {},
+            type: "tool-input-start",
+            id: ToolCallID.make(generatedId),
+            name: toolCall.name,
           })
+
+          if (hasName) {
+            events.push({
+              type: "tool-call",
+              id: ToolCallID.make(generatedId),
+              name: toolCall.name,
+              input: {},
+            })
+          }
+        } else if (!hasId && !hasName && !hasArgs) {
+          // No useful data — skip this delta
+          continue
         }
       }
 
-      // Tool call continuing
+      // Tool call continuing — accumulate arguments and fill in missing name
       if (toolCall && tc.function?.arguments) {
         toolCall.args += tc.function.arguments
         events.push({
@@ -153,6 +164,17 @@ function parseChunk(chunk: OpenAISSEChunk, state: ParseState): LLMEvent[] {
           id: ToolCallID.make(toolCall.id),
           name: toolCall.name,
           text: tc.function.arguments,
+        })
+      }
+
+      // Update name if it wasn't known at creation time (model sends args before name)
+      if (toolCall && tc.function?.name && toolCall.name === "unknown") {
+        toolCall.name = tc.function.name
+        events.push({
+          type: "tool-call",
+          id: ToolCallID.make(toolCall.id),
+          name: toolCall.name,
+          input: {},
         })
       }
     }
