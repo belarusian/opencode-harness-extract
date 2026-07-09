@@ -82,6 +82,10 @@ export {
 export { LLMClient, LLMClientLayer, LLMConfig, simpleRequest, simpleStream, makeLLMClient } from "./client.js"
 export type { LLMClientShape } from "./client.js"
 
+// Retry
+export { retryWithBackoff } from "./retry.js"
+export type { RetryConfig } from "./retry.js"
+
 // Cache
 export { Cache, CacheLayer, makeCache } from "./cache.js"
 export type { CacheShape } from "./cache.js"
